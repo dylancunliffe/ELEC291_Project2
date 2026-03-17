@@ -15,6 +15,32 @@
 
 #define PULSEWAVE_PIN 0
 
+// LCD Pins LCD1 Enable: 2.0 LCD2 Enable: 1.6
+#define LCD_RS P1_7
+#define LCD_E1 P2_0
+#define LCD_E2 P1_6
+#define LCD_D4 P1_3
+#define LCD_D5 P1_2
+#define LCD_D6 P1_1
+#define LCD_D7 P1_0
+#define CHARS_PER_LINE 16
+
+#define FWD_LED		P2_1
+#define BKW_LED		P2_2
+#define ECO_LED		P2_3
+#define TURN_LED	P2_4
+#define AUTO_LED	P2_5
+
+#define DPAD_UP		P0_1
+#define DPAD_DOWN	P0_2
+#define DPAD_LEFT	P0_3
+#define DPAD_RIGHT	P0_4
+
+#define ECO_BUT		P0_5
+#define AUTO_BUT	P0_6
+#define STOP_BUT	P0_7
+#define FLIP_BUT	P3_0
+
 char _c51_external_startup (void)
 {
 	// Disable Watchdog with key sequence
@@ -336,13 +362,13 @@ void Send_Header() {
 
 //sends 8 bits of information over IR
 //LSB transmitted first
-void Send_byte(unsigned char data) {
+void Send_byte(unsigned char data_out) {
 	int i = 0;
 	for (i = 0; i < 8; i++) {
 		PCA0CPM0 |= 0x42;
 		Timer3us(TIC_MARK);
 		PCA0CPM0 &= ~0x42;
-		if ((data >> i) & 1)
+		if ((data_out >> i) & 1)
 			Timer3us(TIC_ONE);
 		else
 			Timer3us(TIC_ZERO);
@@ -354,34 +380,106 @@ void Send_byte(unsigned char data) {
 
 //sends 16 bits of information over IR
 //LSB transmitted first
-void Send_Int(unsigned int data) {
-	Send_byte((unsigned char)(data & 0xFF)); // send least significant byte
-	Send_byte((unsigned char)((data >> 8) & 0xFF));
+void Send_Int(unsigned int data_out) {
+	Send_byte((unsigned char)(data_out & 0xFF)); // send least significant byte
+	Send_byte((unsigned char)((data_out >> 8) & 0xFF));
 }
+
+/********************
+ * UI SECTION		*
+ ********************/
+void Draw_GUI(unsigned char leds, char* LCD1_ln1, char* LCD1_ln2, char* LCD2_ln1, char* LCD2_ln2) {
+	FWD_LED = (leds >> 0) & 1;
+	BKW_LED = (leds >> 1) & 1;
+	ECO_LED = (leds >> 2) & 1;
+	TURN_LED = (leds >> 3) & 1;
+	AUTO_LED = (leds >> 4) & 1;
+
+	LCDprint(LCD1_ln1, 1, 1, 1);
+	LCDprint(LCD1_ln2, 1, 1, 1);
+	LCDprint(LCD2_ln1, 1, 1, 1);
+	LCDprint(LCD2_ln2, 1, 1, 1);
+}
+/********************
+ * HELPER FUCTIONS	*
+ ********************/
+unsigned int Terminate() {
+	return 0;
+}
+
+unsigned int Rotate180() {
+	return 0;
+}
+
 
 void main (void)
 {
-	printf("\x1b[2J"); // Clear screen using ANSI escape sequence.
-	
-	printf ("ADC test program\n"
-	        "File: %s\n"
-	        "Compiled: %s, %s\n\n",
-	        __FILE__, __DATE__, __TIME__);
+	unsigned char leds = 0xFF;
+	char line1[CHARS_PER_LINE] = "LCD1, line1\0";
+	char line2[CHARS_PER_LINE] = "LCD1, line2\0";
+	char line3[CHARS_PER_LINE] = "LCD2, line3\0";
+	char line4[CHARS_PER_LINE] = "LCD2, line4\0";
+	float direction = 0;
+	float rotation = 0;
+	bit aut = 0;
+	bit eco = 0;
+	unsigned int IR_data = 0;
 
 	LCD_4BIT(1);
 	LCD_4BIT(2);
+
+	// Configure P3.0 (GREEN) and P3.1 (RED) as outputs
+	SFRPAGE = 0x20;
+	P3MDOUT |= 0x03; 			// 0000_0011 
+	SFRPAGE = 0x00;
+
+	// Configure pins 2.4, 2.5, and 2.6 for inputs 
+	SFRPAGE = 0x20;
+	P2MDIN |= 0x70;				// 0111_0000
+	SFRPAGE = 0x00;
 	
 	InitPinADC(2, 2); // Configure P2.2 as analog input
 	InitPinADC(2, 3); // Configure P2.3 as analog input
     InitADC();
 	InitPCA_38kHz();
+	
+	Draw_GUI(leds, line1, line2, line3, line4);
+	waitms(500);
+	leds = 0;
+	line1[0] = '\0';
+	line2[0] = '\0';
+	line3[0] = '\0';
+	line4[0] = '\0';
 
-	LCDprint("LCD1", 1, 1, 1); // Header on LCD 1
-	LCDprint("LCD2", 1, 1, 2); // Header on LCD 2
+	printf("\x1b[2J"); // Clear screen using ANSI escape sequence.
+	
+	printf("ADC test program\n"
+		"File: %s\n"
+		"Compiled: %s, %s\n\n",
+		__FILE__, __DATE__, __TIME__);
 
 	while(1)
 	{
+		if (ECO_BUT)
+			eco = eco ? 0 : 1;
+		if (AUTO_BUT)
+			aut = aut ? 0 : 1;
 
+		direction = Volts_at_Pin(QFP32_MUX_P2_2);
+		rotation = Volts_at_Pin(QFP32_MUX_P2_3);
+
+		if (STOP_BUT)
+			IR_data = Terminate();
+		else if (FLIP_BUT)
+			IR_data = Rotate180();
+		else {
+			/*
+			* use this section to develop the code to send the robot
+			*/
+		}
+
+		Send_Int(IR_data);
+		Draw_GUI(leds, line1, line2, line3, line4);
 	}  
 }	
 
