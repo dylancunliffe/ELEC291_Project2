@@ -61,32 +61,39 @@ static void MX_ADC_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-typedef enum { WAIT_IR, FOLLOW_TRACK, AVOID_OBSTACLE, MANUAL_DRIVE } State;
+typedef enum { WAIT_IR, FOLLOW_TRACK, AVOID_OBSTACLE, INTERSECTION_HANDLER, MANUAL_DRIVE } State;
 typedef struct {
     uint8_t stop;
     uint8_t valid_config;
     uint8_t auto_mode;
     uint8_t tof_object;
+    uint8_t intersection_detected;
+    uint8_t signal_lost;
 } FSMFlags;
 
 
-State handleEvent(State currentState, FSMFlags flag) {
+State handleFlags(State currentState, FSMFlags flag) {
     switch (currentState) {
         case WAIT_IR:
             if (flag.valid_config && flag.auto_mode) return FOLLOW_TRACK;
             else if (flag.valid_config && !flag.auto_mode) return MANUAL_DRIVE;
             break;
         case FOLLOW_TRACK:
-            if (flag.stop) return WAIT_IR;
+        	if (flag.stop) return WAIT_IR;
             else if (!flag.auto_mode) return MANUAL_DRIVE;
             else if (flag.tof_object) return AVOID_OBSTACLE;
+            else if (flag.intersection_detected) return INTERSECTION_HANDLER;
             break;
         case AVOID_OBSTACLE:
         	if (!flag.tof_object && flag.auto_mode) return FOLLOW_TRACK;
         	else if (!flag.auto_mode) return MANUAL_DRIVE;
         	else if (flag.stop) return WAIT_IR;
+        	else if (flag.intersection_detected) return INTERSECTION_HANDLER;
+        case INTERSECTION_HANDLER:
+        	if (!flag.intersection_detected) return FOLLOW_TRACK;
         case MANUAL_DRIVE:
-        	if (flag.auto_mode) return FOLLOW_TRACK;
+        	if (flag.signal_lost) return WAIT_IR;
+        	else if (flag.auto_mode) return FOLLOW_TRACK;
         	else if (flag.stop) return WAIT_IR;
     }
     return currentState;
@@ -141,14 +148,17 @@ int main(void)
 
 // CALL IR FUNCTION
 // CALL RADIO FUNCTION
+
 // Gather info and change flags
 /* FLAG INFORMATION
- * flag.stop - EStop command from controller
- * flag.auto_mode - AI vs Manual mode command from controller
- * flag.valid_config - Init com flag from IR
- * flag.tof_object - Object detected by TOF
+ * flag.stop - active high EStop command from controller
+ * flag.auto_mode - AI (high) vs Manual (low) mode command from controller
+ * flag.valid_config - Init com flag from IR, active high
+ * flag.tof_object - Object detected by TOF, active high
+ * flag.signal_lost - set high when IR signal is lost
+ * flag.intersection_detected - set high when intersection detected
  */
-	currentState = handleEvent(currentState, flags);
+	currentState = handleFlags(currentState, flags);
 
 
 	switch(currentState) {
@@ -166,6 +176,10 @@ int main(void)
 			break;
 		// AVOID OBSTACLE State: Follow object avoidance algorithm, wait for stop or TOF off
 		case(AVOID_OBSTACLE):
+
+
+			break;
+		case(HANDLE_INTERSECTION):
 
 
 			break;
