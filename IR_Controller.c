@@ -37,7 +37,6 @@
 #define FLIP_BUT	P3_1
 
 #define IR_PIN		P3_0
-#define RADAR_ADDR  0x01;
 
 unsigned char key1, key2;
 volatile int offset;
@@ -220,7 +219,10 @@ void Send_byte(unsigned char data_out) {
 void Send_16bit(unsigned int data_out) {
 	Send_Header();
 	Send_byte((unsigned char)((data_out >> 8) & 0xFF));
-	Send_byte((unsigned char)((data_out >> 0) & 0xFF)); // send least significant byte
+	Send_byte((unsigned char)((data_out >> 0) & 0xFF));
+	//send inverted data to check for errors
+	Send_byte((unsigned char)(~(data_out >> 8) & 0xFF));
+	Send_byte((unsigned char)(~(data_out >> 0) & 0xFF));
 	Send_Footer();
 }
 
@@ -374,7 +376,7 @@ unsigned char Arrows(float input, int offset, char* string) {
 
 	if (input > VDD * 0.571) {
 		string[offset + 1] = '>';
-		degree = 0x06;
+		degree = 0x04;
 		if ( input > VDD * 0.714) {
 			string[offset + 2] = '>';
 			degree = 0x05;
@@ -510,7 +512,7 @@ bit i2c_write_addr8_data8(unsigned char address, unsigned char value)
 
 void main(void){
 
-	unsigned long IR_data = 0;
+	unsigned int IR_data = 0;
 	/*************************************************************************************
 	* bits | Description
 	* ------------------------------------------------------------------------------------
@@ -537,9 +539,10 @@ void main(void){
 	float direction = 0;
 	float rotation = 0;
 	char screen2_ln1[CHARS_PER_LINE + 1] = "   D        R   ";
-	char screen2_ln2[CHARS_PER_LINE + 1] = "Speed:  .    m/s";
+	char screen2_ln2[CHARS_PER_LINE + 1] = "Speed: X.XXX m/s";
 	volatile unsigned int i2c_buff;
-	const unsigned char radar_addr = 0x00; 
+	const unsigned char radar_addr = 0x00; //temporary until if get the real address
+	unsigned int refresh_acc = 0;
 
 	// Configure P3.0 (GREEN) and P3.1 (RED) as outputs
 	SFRPAGE = 0x20;
@@ -567,19 +570,19 @@ void main(void){
 
 	while (1) {
 
-		if (eco_dbc == 0 && ECO_BUT)
+		if (eco_dbc == 1 && !ECO_BUT)
 			eco = eco ? 0 : 1;
-		aut_dbc = AUTO_BUT;
+		eco_dbc = ECO_BUT;
 
-		if (aut_dbc == 0 && AUTO_BUT)
+		if (aut_dbc == 1 && !AUTO_BUT)
 			aut = aut ? 0 : 1;
 		aut_dbc = AUTO_BUT;
 
-		if (rot_dbc == 0 && FLIP_BUT)
+		if (rot_dbc == 1 && !FLIP_BUT)
 			rot = rot ? 0 : 1;
 		rot_dbc = FLIP_BUT;
 
-		if (stop_dbc == 0 && STOP_BUT)
+		if (stop_dbc == 1 && !STOP_BUT)
 			stop = stop ? 0 : 1;
 		stop_dbc = STOP_BUT;
 
@@ -590,6 +593,7 @@ void main(void){
 
 		direction = Volts_at_Pin(QFP32_MUX_P2_2);
 		rotation = Volts_at_Pin(QFP32_MUX_P2_3);
+		
 		i2c_read_addr8_data16(radar_addr, &i2c_buff);
 
 		if (i2c_buff < 10000) {
@@ -602,47 +606,64 @@ void main(void){
 		//Screen 2 GUI
 		IR_data = (IR_data & ~0x0007) | Arrows(direction, 3, screen2_ln1);
 		IR_data = (IR_data & ~0x0038) | (Arrows(rotation, 12, screen2_ln2) << 3);
-		LCDprint(screen2_ln1, 1, 1, 2);
-		LCDprint(screen2_ln2, 2, 1, 2);
+
 		//Screen 1 GUI
 		switch (path) {
 		case PATH1:
-			LCDprint(">Path1  Path2", 1, 1, 1);
-			LCDprint(" Path3  Path4", 2, 1, 1);
+			if (refresh_acc > 10) {
+				LCDprint(">Path1  Path2", 1, 1, 1);
+				LCDprint(" Path3  Path4", 2, 1, 1);
+			}
 			if (DPAD_DOWN || DPAD_UP)
 				path = PATH3;
 			else if (DPAD_LEFT || DPAD_RIGHT)
 				path = PATH2;
 			break;
 		case PATH2:
-			LCDprint(" Path1 >Path2", 1, 1, 1);
-			LCDprint(" Path3  Path4", 2, 1, 1);
+			if (refresh_acc > 10) {
+				LCDprint(" Path1 >Path2", 1, 1, 1);
+				LCDprint(" Path3  Path4", 2, 1, 1);
+			}
 			if (DPAD_DOWN || DPAD_UP)
 				path = PATH4;
 			else if (DPAD_LEFT || DPAD_RIGHT)
 				path = PATH1;
 			break;
 		case PATH3:
-			LCDprint(" Path1  Path2", 1, 1, 1);
-			LCDprint(">Path3  Path4", 2, 1, 1);
+			if (refresh_acc > 10) {
+				LCDprint(" Path1  Path2", 1, 1, 1);
+				LCDprint(">Path3  Path4", 2, 1, 1);
+			}
 			if (DPAD_DOWN || DPAD_UP)
 				path = PATH1;
 			else if (DPAD_LEFT || DPAD_RIGHT)
 				path = PATH4;
 			break;
 		case PATH4:
-			LCDprint(" Path1  Path2", 1, 1, 1);
-			LCDprint(" Path3 >Path4", 2, 1, 1);
+			if (refresh_acc > 10) {
+				LCDprint(" Path1  Path2", 1, 1, 1);
+				LCDprint(" Path3 >Path4", 2, 1, 1);
+			}
 			if (DPAD_DOWN || DPAD_UP)
 				path = PATH3;
 			else if (DPAD_LEFT || DPAD_RIGHT)
 				path = PATH2;
 			break;
 		default:
-			LCDprint("ERROR", 1, 1, 1);
-			LCDprint("ERROR", 2, 1, 1);
+			if (refresh_acc > 10) {
+				LCDprint("ERROR", 1, 1, 1);
+				LCDprint("ERROR", 2, 1, 1);
+			}
 		}
 		IR_data = (IR_data & ~(3 << 6)) | (path << 6);
+		
+		//bottlenecked by IR transmission so loop which runs 30-50ms, therefore wait 300-500ms before writing the LCD
+		if (refresh_acc > 10) {
+			LCDprint(screen2_ln1, 1, 1, 2);
+			LCDprint(screen2_ln2, 2, 1, 2);
+			refresh_acc = 0;
+		}
+		else refresh_acc++;
 
 		Send_16bit(IR_data);
 	}
