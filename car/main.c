@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <stdlib.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -42,9 +42,6 @@
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc;
 
-I2C_HandleTypeDef hi2c1;
-DMA_HandleTypeDef hdma_i2c1_rx;
-
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim22;
 
@@ -55,54 +52,57 @@ TIM_HandleTypeDef htim22;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_DMA_Init(void);
+static void MX_ADC_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM22_Init(void);
-static void MX_ADC_Init(void);
-static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-typedef enum { WAIT_IR, FOLLOW_TRACK, AVOID_OBSTACLE, INTERSECTION_HANDLER, MANUAL_DRIVE } State;
-typedef struct {
-    uint8_t stop;
-    uint8_t valid_config;
-    uint8_t auto_mode;
-    uint8_t tof_object;
-    uint8_t intersection_detected;
-    uint8_t signal_lost;
-} FSMFlags;
 
+// need to initialize the PWM generation for the timer pins
+// HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+// HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+// HAL_TIM_PWM_Start(&htim22, TIM_CHANNEL_1);
+// HAL_TIM_PWM_Start(&htim22, TIM_CHANNEL_2);
+static void TurnMTR(int8_t horz, int8_t vert, uint8_t eco) {
 
-State handleFlags(State currentState, FSMFlags flag) {
-    switch (currentState) {
-        case WAIT_IR:
-            if (flag.valid_config && flag.auto_mode) return FOLLOW_TRACK;
-            else if (flag.valid_config && !flag.auto_mode) return MANUAL_DRIVE;
-            break;
-        case FOLLOW_TRACK:
-        	if (flag.stop) return WAIT_IR;
-            else if (!flag.auto_mode) return MANUAL_DRIVE;
-            else if (flag.tof_object) return AVOID_OBSTACLE;
-            else if (flag.intersection_detected) return INTERSECTION_HANDLER;
-            break;
-        case AVOID_OBSTACLE:
-        	if (!flag.tof_object && flag.auto_mode) return FOLLOW_TRACK;
-        	else if (!flag.auto_mode) return MANUAL_DRIVE;
-        	else if (flag.stop) return WAIT_IR;
-        	else if (flag.intersection_detected) return INTERSECTION_HANDLER;
-        case INTERSECTION_HANDLER:
-        	if (!flag.intersection_detected) return FOLLOW_TRACK;
-        case MANUAL_DRIVE:
-        	if (flag.signal_lost) return WAIT_IR;
-        	else if (flag.auto_mode) return FOLLOW_TRACK;
-        	else if (flag.stop) return WAIT_IR;
-    }
-    return currentState;
+	// horz, vert both -128 - 127
+
+	int16_t mtr1_val = abs(((int16_t)vert + (int16_t)horz)*7.8);	// Left Motor (car turns right if this is larger)
+	int16_t mtr2_val = abs(((int16_t)vert - (int16_t)horz)*7.8);	// Right Motor (car turns left if this is larger)
+	if(mtr1_val > 999) mtr1_val = 999;
+	if(mtr2_val > 999) mtr2_val = 999;
+
+	if(mtr1_val == 0 && mtr2_val == 0) {	// if no movement
+		TIM2->CCR1 = 0;
+		TIM2->CCR2 = 0;
+		TIM22->CCR1 = 0;
+		TIM22->CCR2 = 0;
+	}
+
+	if(vert > 0) {
+			TIM2->CCR1 = mtr1_val;
+			TIM2->CCR2 = 0;
+		}
+	else {
+		TIM2->CCR1 = 0;
+		TIM2->CCR2 = mtr1_val;
+	}
+
+	if(vert > 0) {
+		TIM22->CCR1 = mtr2_val;
+		TIM22->CCR2 = 0;
+	}
+	else{
+		TIM22->CCR1 = 0;
+		TIM22->CCR2 = mtr2_val;
+	}
+
 }
+
 /* USER CODE END 0 */
 
 /**
@@ -113,7 +113,6 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -134,15 +133,15 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_DMA_Init();
+  MX_ADC_Init();
   MX_TIM2_Init();
   MX_TIM22_Init();
-  MX_ADC_Init();
-  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
-  // FSM Declarations
-  State currentState = WAIT_IR;
-  FSMFlags flags = {0};
+
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+  HAL_TIM_PWM_Start(&htim22, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim22, TIM_CHANNEL_2);
 
   /* USER CODE END 2 */
 
@@ -151,47 +150,14 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-
     /* USER CODE BEGIN 3 */
 
-// CALL IR FUNCTION
-// CALL RADIO FUNCTION
-
-// Gather info and change flags
-/* FLAG INFORMATION
- * flag.stop - active high EStop command from controller
- * flag.auto_mode - AI (high) vs Manual (low) mode command from controller
- * flag.valid_config - Init com flag from IR, active high
- * flag.tof_object - Object detected by TOF, active high
- * flag.signal_lost - set high when IR signal is lost
- * flag.intersection_detected - set high when intersection detected
- */
-	currentState = handleFlags(currentState, flags);
-
-
-	switch(currentState) {
-		// WAIT_IR State: Waiting for VALID_CONFIG, default STOP state
-		case(WAIT_IR):
-
-			break;
-		// FOLLOW_TRACK State: Following selected track, waiting for TOF, auto or STOP command
-		case(FOLLOW_TRACK):
-
-			break;
-		// MANUAL DRIVE State: Following user inputs, waiting for stop, or auto
-		case(MANUAL_DRIVE):
-
-			break;
-		// AVOID OBSTACLE State: Follow object avoidance algorithm, wait for stop or TOF off
-		case(AVOID_OBSTACLE):
-
-
-			break;
-		case(HANDLE_INTERSECTION):
-
-
-			break;
-	}
+	  if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8) == GPIO_PIN_SET) {
+	  		  TurnMTR(0,0,0);
+	  	  }
+	  else {
+		  TurnMTR(0, 127, 0);
+	  }
   }
   /* USER CODE END 3 */
 }
@@ -204,7 +170,6 @@ void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
-  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
 
   /** Configure the main internal regulator output voltage
   */
@@ -213,10 +178,9 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_MSI;
-  RCC_OscInitStruct.MSIState = RCC_MSI_ON;
-  RCC_OscInitStruct.MSICalibrationValue = 0;
-  RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_5;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
@@ -227,18 +191,12 @@ void SystemClock_Config(void)
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_MSI;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
   if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_I2C1;
-  PeriphClkInit.I2c1ClockSelection = RCC_I2C1CLKSOURCE_PCLK1;
-  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
     Error_Handler();
   }
@@ -279,7 +237,7 @@ static void MX_ADC_Init(void)
   hadc.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   hadc.Init.Overrun = ADC_OVR_DATA_PRESERVED;
   hadc.Init.LowPowerAutoWait = DISABLE;
-  hadc.Init.LowPowerFrequencyMode = ENABLE;
+  hadc.Init.LowPowerFrequencyMode = DISABLE;
   hadc.Init.LowPowerAutoPowerOff = DISABLE;
   if (HAL_ADC_Init(&hadc) != HAL_OK)
   {
@@ -317,54 +275,6 @@ static void MX_ADC_Init(void)
 }
 
 /**
-  * @brief I2C1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_I2C1_Init(void)
-{
-
-  /* USER CODE BEGIN I2C1_Init 0 */
-
-  /* USER CODE END I2C1_Init 0 */
-
-  /* USER CODE BEGIN I2C1_Init 1 */
-
-  /* USER CODE END I2C1_Init 1 */
-  hi2c1.Instance = I2C1;
-  hi2c1.Init.Timing = 0x00000608;
-  hi2c1.Init.OwnAddress1 = 0;
-  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  hi2c1.Init.OwnAddress2 = 0;
-  hi2c1.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
-  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure Analogue filter
-  */
-  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure Digital filter
-  */
-  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN I2C1_Init 2 */
-
-  /* USER CODE END I2C1_Init 2 */
-
-}
-
-/**
   * @brief TIM2 Initialization Function
   * @param None
   * @retval None
@@ -384,9 +294,9 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
+  htim2.Init.Prescaler = 7;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 7999;
+  htim2.Init.Period = 999;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -441,14 +351,15 @@ static void MX_TIM22_Init(void)
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
 
   /* USER CODE BEGIN TIM22_Init 1 */
 
   /* USER CODE END TIM22_Init 1 */
   htim22.Instance = TIM22;
-  htim22.Init.Prescaler = 0;
+  htim22.Init.Prescaler = 7;
   htim22.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim22.Init.Period = 7999;
+  htim22.Init.Period = 999;
   htim22.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim22.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim22) != HAL_OK)
@@ -460,31 +371,32 @@ static void MX_TIM22_Init(void)
   {
     Error_Handler();
   }
+  if (HAL_TIM_PWM_Init(&htim22) != HAL_OK)
+  {
+    Error_Handler();
+  }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim22, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
   }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim22, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim22, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE BEGIN TIM22_Init 2 */
 
   /* USER CODE END TIM22_Init 2 */
-
-}
-
-/**
-  * Enable DMA controller clock
-  */
-static void MX_DMA_Init(void)
-{
-
-  /* DMA controller clock enable */
-  __HAL_RCC_DMA1_CLK_ENABLE();
-
-  /* DMA interrupt init */
-  /* DMA1_Channel2_3_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel2_3_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel2_3_IRQn);
+  HAL_TIM_MspPostInit(&htim22);
 
 }
 
@@ -512,7 +424,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(RADIO_CE_GPIO_Port, RADIO_CE_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, LED_3_Pin|LED_L_Pin|LED_R_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LED_L_Pin|LED_R_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : IR_RX_Pin */
   GPIO_InitStruct.Pin = IR_RX_Pin;
@@ -556,11 +468,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(RADIO_IRQ_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LED_3_Pin LED_L_Pin LED_R_Pin */
-  GPIO_InitStruct.Pin = LED_3_Pin|LED_L_Pin|LED_R_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  /*Configure GPIO pin : PA8 */
+  GPIO_InitStruct.Pin = GPIO_PIN_8;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : UART_TX_Pin UART_RX_Pin */
@@ -571,13 +482,27 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF4_USART1;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
+  /*Configure GPIO pins : LED_L_Pin LED_R_Pin */
+  GPIO_InitStruct.Pin = LED_L_Pin|LED_R_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB6 TOF_SDA_Pin */
+  GPIO_InitStruct.Pin = GPIO_PIN_6|TOF_SDA_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF1_I2C1;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
-
 /* USER CODE END 4 */
 
 /**
