@@ -25,6 +25,15 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+#include <strings.h>
+#include "ir_r.h"
+#include "NRF24.h"
+#include "NRF24_reg_addresses.h"
+
+#define PLD_SIZE 32
+
+#define tx //comment this part out for rx code, otherwise this is tx code
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,8 +57,11 @@ ADC_HandleTypeDef hadc;
 I2C_HandleTypeDef hi2c1;
 DMA_HandleTypeDef hdma_i2c1_tx;
 
+SPI_HandleTypeDef hspi1;
+
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim6;
+TIM_HandleTypeDef htim21;
 TIM_HandleTypeDef htim22;
 
 UART_HandleTypeDef huart1;
@@ -68,6 +80,8 @@ static void MX_ADC_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_TIM6_Init(void);
 static void MX_USART1_UART_Init(void);
+static void MX_SPI1_Init(void);
+static void MX_TIM21_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -113,6 +127,10 @@ State handleFlags(State currentState, FSMFlags flag) {
     }
     return currentState;
 }
+
+
+uint8_t data_T[PLD_SIZE] = { "Hello Dylan Boy" };
+
 /* USER CODE END 0 */
 
 /**
@@ -150,6 +168,8 @@ int main(void)
   MX_I2C1_Init();
   MX_TIM6_Init();
   MX_USART1_UART_Init();
+  MX_SPI1_Init();
+  MX_TIM21_Init();
   /* USER CODE BEGIN 2 */
 
   HAL_TIM_Base_Start(&htim6);
@@ -168,13 +188,28 @@ int main(void)
   else{
 	  printf("VL5310X INIT FAILED.\r\n");
   }
+
+  nrf24_init();
+  nrf24_tx_pwr(_0dbm);
+  nrf24_data_rate(_1mbps);
+  nrf24_set_channel(78);
+  nrf24_set_crc(en_crc, _1byte);
+  nrf24_pipe_pld_size(0, PLD_SIZE);
+  uint8_t addr[5] = { 0x10, 0x21, 0x32, 0x43, 0x54};
+  nrf24_open_tx_pipe(addr);
+  nrf24_open_rx_pipe(0, addr);
+
+  printf("NRF24 INIT SUCCESS\r\n");
+
+  nrf24_stop_listen();
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  // Gather info and change flags
+	  // Collect info and change flags
 	  /* FLAG INFORMATION
 	   * flag.stop - active high EStop command from controller
 	   * flag.auto_mode - AI (high) vs Manual (low) mode command from controller
@@ -185,6 +220,7 @@ int main(void)
 	   */
 	  	currentState = handleFlags(currentState, flags);
 
+	  	// FSM
 	  	switch(currentState) {
 	  		// WAIT_IR State: Waiting for VALID_CONFIG, default STOP state
 	  		case(WAIT_IR):
@@ -199,22 +235,13 @@ int main(void)
 	  				tof_success = TOFStartMeasurement();
 	  				__HAL_TIM_SET_COUNTER(&htim6, 0);
 	  				flags.tof_busy = 1;
-	  				if(tof_success == true){
-	  					//printf("TOF Measurement Start Successful\r\n");
-	  				}
-	  				else {
-	  					//printf("TOF Measurement Start Failed\r\n");
-	  				}
+	  				//if(tof_success == true) printf("TOF Measurement Start Successful\r\n");
+	  				//else printf("TOF Measurement Start Failed\r\n");
 	  			}
-	  			// END TOF Measurement if enough time has passed
 	  			else if (__HAL_TIM_GET_COUNTER(&htim6) >= 250) {
-
-	  			    // We only call this ONCE every 50ms
 	  			    tof_success = TOFRecordMeasurement(&distance);
-
 	  			    if (tof_success == true) {
-	  			    	// TUNE TOF MIN DISTANCE HERE
-	  			    	if(distance < 200){
+	  			    	if(distance < 200){ // TUNE TOF MIN DISTANCE HERE
 	  			    		flags.tof_object = 1;
 	  			    		printf("OBJECT DETECTED\r\n");
 	  			    	}
@@ -224,13 +251,7 @@ int main(void)
 	  			    	}
 	  			        printf("Distance: %d mm\r\n", distance);
 	  			    }
-	  			    else {
-	  			        // If it fails, the sensor wasn't ready.
-	  			        // We still reset so we don't spam the I2C bus.
-	  			        //printf("Sensor read skipped or failed\r\n");
-	  			    }
-
-	  			    // Always reset
+	  			    // else printf("Sensor read skipped or failed\r\n");
 	  			    flags.tof_busy = 0;
 	  			    __HAL_TIM_SET_COUNTER(&htim6, 0);
 	  			}
@@ -250,12 +271,20 @@ int main(void)
 
 	  			break;
 	  	}
+
+
+	  	// RADIO TX
+	  	// Pack data_T with all tx vars
+	  	//data_T[0] = 0x1;
+	  	//data_T[1] = 0x0;
+	  	//nrf24_transmit(data_T, sizeof(data_T));
+	  	//HAL_Delay(1); //avoids noise
   }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
 
-    /* USER CODE END 3 */
+  /* USER CODE END 3 */
 }
 
 /**
@@ -275,11 +304,13 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_MSI;
-  RCC_OscInitStruct.MSIState = RCC_MSI_ON;
-  RCC_OscInitStruct.MSICalibrationValue = 0;
-  RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_5;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLLMUL_4;
+  RCC_OscInitStruct.PLL.PLLDIV = RCC_PLLDIV_2;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -289,12 +320,12 @@ void SystemClock_Config(void)
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_MSI;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK)
   {
     Error_Handler();
   }
@@ -329,7 +360,7 @@ static void MX_ADC_Init(void)
   */
   hadc.Instance = ADC1;
   hadc.Init.OversamplingMode = DISABLE;
-  hadc.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV1;
+  hadc.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV2;
   hadc.Init.Resolution = ADC_RESOLUTION_12B;
   hadc.Init.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
   hadc.Init.ScanConvMode = ADC_SCAN_DIRECTION_FORWARD;
@@ -342,7 +373,7 @@ static void MX_ADC_Init(void)
   hadc.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   hadc.Init.Overrun = ADC_OVR_DATA_PRESERVED;
   hadc.Init.LowPowerAutoWait = DISABLE;
-  hadc.Init.LowPowerFrequencyMode = ENABLE;
+  hadc.Init.LowPowerFrequencyMode = DISABLE;
   hadc.Init.LowPowerAutoPowerOff = DISABLE;
   if (HAL_ADC_Init(&hadc) != HAL_OK)
   {
@@ -395,7 +426,7 @@ static void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.Timing = 0x00000608;
+  hi2c1.Init.Timing = 0x00B07CB4;
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
@@ -424,6 +455,44 @@ static void MX_I2C1_Init(void)
   /* USER CODE BEGIN I2C1_Init 2 */
 
   /* USER CODE END I2C1_Init 2 */
+
+}
+
+/**
+  * @brief SPI1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI1_Init(void)
+{
+
+  /* USER CODE BEGIN SPI1_Init 0 */
+
+  /* USER CODE END SPI1_Init 0 */
+
+  /* USER CODE BEGIN SPI1_Init 1 */
+
+  /* USER CODE END SPI1_Init 1 */
+  /* SPI1 parameter configuration*/
+  hspi1.Instance = SPI1;
+  hspi1.Init.Mode = SPI_MODE_MASTER;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.NSS = SPI_NSS_SOFT;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi1.Init.CRCPolynomial = 7;
+  if (HAL_SPI_Init(&hspi1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI1_Init 2 */
+
+  /* USER CODE END SPI1_Init 2 */
 
 }
 
@@ -508,7 +577,7 @@ static void MX_TIM6_Init(void)
 
   /* USER CODE END TIM6_Init 1 */
   htim6.Instance = TIM6;
-  htim6.Init.Prescaler = 3199;
+  htim6.Init.Prescaler = 2096;
   htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim6.Init.Period = 65535;
   htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -525,6 +594,51 @@ static void MX_TIM6_Init(void)
   /* USER CODE BEGIN TIM6_Init 2 */
 
   /* USER CODE END TIM6_Init 2 */
+
+}
+
+/**
+  * @brief TIM21 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM21_Init(void)
+{
+
+  /* USER CODE BEGIN TIM21_Init 0 */
+
+  /* USER CODE END TIM21_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM21_Init 1 */
+
+  /* USER CODE END TIM21_Init 1 */
+  htim21.Instance = TIM21;
+  htim21.Init.Prescaler = 15;
+  htim21.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim21.Init.Period = 15000;
+  htim21.Init.ClockDivision = TIM_CLOCKDIVISION_DIV2;
+  htim21.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim21) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim21, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim21, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM21_Init 2 */
+
+  /* USER CODE END TIM21_Init 2 */
 
 }
 
@@ -645,14 +759,14 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(SPK_OUT_GPIO_Port, SPK_OUT_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(RADIO_CE_GPIO_Port, RADIO_CE_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, RADIO_CSN_Pin|LED_3_Pin|LED_L_Pin|LED_R_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, LED_3_Pin|LED_L_Pin|LED_R_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(RADIO_CE_GPIO_Port, RADIO_CE_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : IR_RX_Pin */
   GPIO_InitStruct.Pin = IR_RX_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(IR_RX_GPIO_Port, &GPIO_InitStruct);
 
@@ -663,20 +777,11 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(SPK_OUT_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : IR_TX_Pin */
-  GPIO_InitStruct.Pin = IR_TX_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  /*Configure GPIO pins : RADIO_CSN_Pin LED_3_Pin LED_L_Pin LED_R_Pin */
+  GPIO_InitStruct.Pin = RADIO_CSN_Pin|LED_3_Pin|LED_L_Pin|LED_R_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.Alternate = GPIO_AF0_TIM21;
-  HAL_GPIO_Init(IR_TX_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : RADIO_NSS_Pin RADIO_SCK_Pin RADIO_MISO_Pin RADIO_MOSI_Pin */
-  GPIO_InitStruct.Pin = RADIO_NSS_Pin|RADIO_SCK_Pin|RADIO_MISO_Pin|RADIO_MOSI_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF0_SPI1;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : RADIO_CE_Pin */
@@ -688,16 +793,13 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : RADIO_IRQ_Pin */
   GPIO_InitStruct.Pin = RADIO_IRQ_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(RADIO_IRQ_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LED_3_Pin LED_L_Pin LED_R_Pin */
-  GPIO_InitStruct.Pin = LED_3_Pin|LED_L_Pin|LED_R_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI4_15_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
