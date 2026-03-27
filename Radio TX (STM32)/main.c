@@ -18,6 +18,8 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include <stdlib.h>
+#include <stdio.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -75,8 +77,12 @@ static void MX_USART1_UART_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 #ifdef tx
-uint8_t data_T[PLD_SIZE] = { "Hello Dylan Boy" };
+uint8_t data_T[PLD_SIZE];// = { "Hello Dylan Boy" };
 uint8_t ack_T[PLD_SIZE];
+
+uint8_t message[PLD_SIZE];
+int counter = 0;
+
 #else
 uint8_t data_R[PLD_SIZE];
 uint8_t ack_R[PLD_SIZE] = { "Received!" };
@@ -91,7 +97,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+	printf("main works");
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -121,11 +127,15 @@ int main(void)
   csn_high();
 
   nrf24_init();
-  nrf24_tx_pwr(_0dbm);
+  nrf24_tx_pwr(n18dbm); // _0dbm
   nrf24_data_rate(_1mbps);
   nrf24_set_channel(78);
   nrf24_set_crc(en_crc, _1byte);
   nrf24_pipe_pld_size(0, PLD_SIZE);
+
+  nrf24_auto_retr_delay(5);
+  nrf24_auto_retr_limit(15);
+
   uint8_t addr[5] = { 0x10, 0x21, 0x32, 0x43, 0x54};
   nrf24_open_tx_pipe(addr);
   nrf24_open_rx_pipe(0, addr);
@@ -141,12 +151,24 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
+
   while (1)
   {
 #ifdef tx
-	  nrf24_transmit(data_T, sizeof(data_T));
+	sprintf((char*)data_T, "%d", counter);
 
-	  HAL_Delay(1); //avoids noise
+	uint8_t stm_channel = nrf24_r_reg(RF_CH, 1);
+	printf("STM32 Diagnostic - Channel: %d\r\n", stm_channel);
+
+	  if(nrf24_transmit(data_T, sizeof(data_T)) == 0){
+		  printf("Passed!!");
+	  }
+	  else
+		  printf("Failed");
+
+	  HAL_Delay(100); //avoids noise
+	  counter = counter +1;
 #else
 	  nrf24_listen();
 
@@ -348,7 +370,7 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
+  htim2.Init.Prescaler = 31;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 7999;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -563,7 +585,11 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+int _write(int file, char *ptr, int len) {
+    // Transmit the string over UART
+    HAL_UART_Transmit(&huart1, (uint8_t*)ptr, len, HAL_MAX_DELAY);
+    return len;
+}
 /* USER CODE END 4 */
 
 /**

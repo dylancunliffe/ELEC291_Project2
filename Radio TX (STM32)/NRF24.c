@@ -453,7 +453,6 @@ size_t nrf24_uint8_t_to_type(uint8_t* in, uint16_t size){
 uint8_t nrf24_transmit(uint8_t *data, uint8_t size){
 
 	ce_low();
-
 	uint8_t cmd = W_TX_PAYLOAD;
 
 	csn_low();
@@ -461,17 +460,27 @@ uint8_t nrf24_transmit(uint8_t *data, uint8_t size){
 	HAL_SPI_Transmit(&hspiX, data, size, spi_w_timeout);
 	csn_high();
 
+	// Pulse CE to start transmission
 	ce_high();
 	delay_us(20);
 	ce_low();
 
-	if(nrf24_r_status() & (1 << MAX_RT)){
+	// CRITICAL FIX: Wait here until the radio ACTUALLY finishes!
+	uint8_t status;
+	do {
+		status = nrf24_r_status();
+	} while( !(status & (1 << TX_DS)) && !(status & (1 << MAX_RT)) );
+
+	// Now check if it failed
+	if(status & (1 << MAX_RT)){
 		nrf24_clear_max_rt();
 		nrf24_flush_tx();
-		return 1;
+		return 1; // Actually Failed
 	}
 
-	return 0;
+	// Clear the success flag
+	nrf24_clear_tx_ds();
+	return 0; // Actually Passed
 }
 
 uint8_t nrf24_transmit_no_ack(uint8_t *data, uint8_t size){
