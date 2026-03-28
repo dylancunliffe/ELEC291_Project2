@@ -7,36 +7,38 @@
 
 #define SYSCLK 72000000L
 #define BAUDRATE 115200L
+#define SARCLK 18000000L
+#define ADC_MAX 14100
 #define VDD 3.3035 // The measured value of VDD in volts
-#define  SMB_FREQUENCY  400000L   // I2C SCL clock rate
+#define SMB_FREQUENCY  400000L   // I2C SCL clock rate
 
 // LCD Pins LCD1 Enable: 2.0 LCD2 Enable: 1.6
-#define LCD_RS P1_7
-#define LCD_E1 P2_0
-#define LCD_E2 P1_6
-#define LCD_D4 P1_3
-#define LCD_D5 P1_2
-#define LCD_D6 P1_1
-#define LCD_D7 P1_0
+#define LCD_RS P1_1
+#define LCD_E1 P1_0
+#define LCD_E2 P0_7
+#define LCD_D4 P0_6
+#define LCD_D5 P0_3
+#define LCD_D6 P0_2
+#define LCD_D7 P0_1
 #define CHARS_PER_LINE 16
 
-#define FWD_LED		P2_1
-#define BKW_LED		P2_2
-#define ECO_LED		P2_3
-#define TURN_LED	P2_4
+#define FWD_LED		P3_2
+#define BKW_LED		P3_3
+#define ECO_LED		P3_7
+#define FLIP_LED	P3_1
 #define AUTO_LED	P2_5
 
-#define DPAD_UP		P0_1
-#define DPAD_DOWN	P0_2
-#define DPAD_LEFT	P0_3
-#define DPAD_RIGHT	P0_4
+#define DPAD_UP		P1_5
+#define DPAD_DOWN	P1_6
+#define DPAD_LEFT	P1_7
+#define DPAD_RIGHT	P2_0
 
-#define ECO_BUT		P0_5
-#define AUTO_BUT	P0_6
-#define STOP_BUT	P0_7
-#define FLIP_BUT	P3_1
+#define ECO_BUT		P3_0
+#define AUTO_BUT	P1_3
+#define STOP_BUT	P1_2
+#define FLIP_BUT	P1_4
 
-#define IR_PIN		P3_0
+#define IR_PIN		P0_0
 
 unsigned char key1, key2;
 volatile int offset;
@@ -229,6 +231,44 @@ void Send_16bit(unsigned int data_out) {
 /********************
  * ADC SECTION		*
  ********************/
+void InitADC(void)
+{
+	SFRPAGE = 0x00;
+	ADEN = 0; // Disable ADC
+
+	ADC0CN1 =
+		(0x2 << 6) | // 0x0: 10-bit, 0x1: 12-bit, 0x2: 14-bit
+		(0x0 << 3) | // 0x0: No shift. 0x1: Shift right 1 bit. 0x2: Shift right 2 bits. 0x3: Shift right 3 bits.		
+		(0x0 << 0); // Accumulate n conversions: 0x0: 1, 0x1:4, 0x2:8, 0x3:16, 0x4:32
+
+	ADC0CF0 =
+		((SYSCLK / SARCLK) << 3) | // SAR Clock Divider. Max is 18MHz. Fsarclk = (Fadcclk) / (ADSC + 1)
+		(0x0 << 2); // 0:SYSCLK ADCCLK = SYSCLK. 1:HFOSC0 ADCCLK = HFOSC0.
+
+	ADC0CF1 =
+		(0 << 7) | // 0: Disable low power mode. 1: Enable low power mode.
+		(0x1E << 0); // Conversion Tracking Time. Tadtk = ADTK / (Fsarclk)
+
+	ADC0CN0 =
+		(0x0 << 7) | // ADEN. 0: Disable ADC0. 1: Enable ADC0.
+		(0x0 << 6) | // IPOEN. 0: Keep ADC powered on when ADEN is 1. 1: Power down when ADC is idle.
+		(0x0 << 5) | // ADINT. Set by hardware upon completion of a data conversion. Must be cleared by firmware.
+		(0x0 << 4) | // ADBUSY. Writing 1 to this bit initiates an ADC conversion when ADCM = 000. This bit should not be polled to indicate when a conversion is complete. Instead, the ADINT bit should be used when polling for conversion completion.
+		(0x0 << 3) | // ADWINT. Set by hardware when the contents of ADC0H:ADC0L fall within the window specified by ADC0GTH:ADC0GTL and ADC0LTH:ADC0LTL. Can trigger an interrupt. Must be cleared by firmware.
+		(0x0 << 2) | // ADGN (Gain Control). 0x0: PGA gain=1. 0x1: PGA gain=0.75. 0x2: PGA gain=0.5. 0x3: PGA gain=0.25.
+		(0x0 << 0); // TEMPE. 0: Disable the Temperature Sensor. 1: Enable the Temperature Sensor.
+
+	ADC0CF2 =
+		(0x0 << 7) | // GNDSL. 0: reference is the GND pin. 1: reference is the AGND pin.
+		(0x1 << 5) | // REFSL. 0x0: VREF pin (external or on-chip). 0x1: VDD pin. 0x2: 1.8V. 0x3: internal voltage reference.
+		(0x1F << 0); // ADPWR. Power Up Delay Time. Tpwrtime = ((4 * (ADPWR + 1)) + 2) / (Fadcclk)
+
+	ADC0CN2 =
+		(0x0 << 7) | // PACEN. 0x0: The ADC accumulator is over-written.  0x1: The ADC accumulator adds to results.
+		(0x0 << 0); // ADCM. 0x0: ADBUSY, 0x1: TIMER0, 0x2: TIMER2, 0x3: TIMER3, 0x4: CNVSTR, 0x5: CEX5, 0x6: TIMER4, 0x7: TIMER5, 0x8: CLU0, 0x9: CLU1, 0xA: CLU2, 0xB: CLU3
+
+	ADEN = 1; // Enable ADC
+}
 
 void InitPinADC(unsigned char portno, unsigned char pinno)
 {
@@ -264,11 +304,6 @@ unsigned int ADC_at_Pin(unsigned char pin)
 	ADBUSY = 1;     // Convert voltage at the pin
 	while (!ADINT); // Wait for conversion to complete
 	return (ADC0);
-}
-
-float Volts_at_Pin(unsigned char pin)
-{
-	return ((ADC_at_Pin(pin) * VDD) / 0b_0011_1111_1111_1111);
 }
 
 /********************
@@ -353,45 +388,43 @@ void LCDprint(char* string, unsigned char line, bit clear, int display)
 	if (clear) for (; j < CHARS_PER_LINE; j++) WriteData(' ', display); // Clear the rest of the line
 }
 
-unsigned char Arrows(float input, int offset, char* string) {
+unsigned char Arrows(unsigned int input_adc, int offset, char* string) {
 	unsigned char degree = 0x03;
-	if (input < VDD * 0.429) {
+	unsigned int frac = ADC_MAX / 5;
+
+	//clear all arrows
+	string[offset - 1] = ' ';
+	string[offset - 2] = ' ';
+	string[offset - 3] = ' ';
+	string[offset + 1] = ' ';
+	string[offset + 2] = ' ';
+	string[offset + 3] = ' ';
+
+	if (input_adc > frac * 3) {
+		string[offset + 1] = '>';
+		degree = 0x04;
+		if (input_adc > frac * 4) {
+			string[offset + 2] = '>';
+			degree = 0x04;
+			if (input_adc >= ADC_MAX) {
+				string[offset + 3] = '>';
+				degree = 0x04;
+			}
+		}
+	}
+
+	if (input_adc < frac * 2) {
 		string[offset - 1] = '<';
 		degree = 0x02;
-		if (input < VDD * 0.286) {
+		if (input_adc < frac) {
 			string[offset - 2] = '<';
 			degree = 0x01;
-			if (input < VDD * 0.143) {
+			if (input_adc <= 0) {
 				string[offset - 3] = '<';
 				degree = 0x00;
 			}
-			else
-				string[offset - 3] = ' ';
 		}
-		else
-			string[offset - 2] = ' ';
 	}
-	else
-		string[offset - 1] = ' ';
-
-	if (input > VDD * 0.571) {
-		string[offset + 1] = '>';
-		degree = 0x04;
-		if ( input > VDD * 0.714) {
-			string[offset + 2] = '>';
-			degree = 0x05;
-			if (input > VDD * 0.857) {
-				string[offset + 3] = '>';
-				degree = 0x06;
-			}
-			else
-				string[offset + 3] = ' ';
-		}
-		else
-			string[offset + 2] = ' ';
-	}
-	else
-		string[offset + 1] = ' ';
 
 	return degree;
 }
@@ -527,49 +560,104 @@ void main(void){
 	**************************************************************************************/
 
 	path_select path = PATH1;
+	bit dpad_up_dbc = 0;
+	bit dpad_up_edge = 0;
+	bit dpad_down_dbc = 0;
+	bit dpad_down_edge = 0;
+	bit dpad_right_dbc = 0;
+	bit dpad_right_edge = 0;
+	bit dpad_left_dbc = 0;
+	bit dpad_left_edge = 0;
+
 	bit eco_dbc = 0;
 	bit eco = 0;
 	bit aut_dbc = 0;
 	bit aut = 0;
-	bit rot_dbc = 0;
-	bit rot = 0;
+	bit flip_dbc = 0;
+	bit flip = 0;
 	bit stop_dbc = 0;
 	bit stop = 0;
 
-	float direction = 0;
-	float rotation = 0;
+	unsigned int direction = 0; //14 bit adc reading
+	unsigned int rotation = 0;  //14 bit adc reading
 	char screen2_ln1[CHARS_PER_LINE + 1] = "   D        R   ";
 	char screen2_ln2[CHARS_PER_LINE + 1] = "Speed: X.XXX m/s";
 	volatile unsigned int i2c_buff;
 	const unsigned char radar_addr = 0x00; //temporary until if get the real address
-	unsigned int refresh_acc = 0;
 
-	// Configure P3.0 (GREEN) and P3.1 (RED) as outputs
+	/* Configure I/0 for P1 register:
+	* 0.0 - IR Transmit	| out
+	* 0.1 - LCD D7		| out
+	* 0.2 - LCD D6		| out
+	* 0.3 - LCD D5		| out
+	* 0.4 - TX			| N/A
+	* 0.5 - RX			| N/A
+	* 0.6 - LCD D4		| out
+	* 0.7 - LCD Enable2 | out
+	*/
 	SFRPAGE = 0x20;
-	P3MDOUT |= 0x03; 			// 0000_0011 
+	P0MDOUT |= 0xCF; 			// 1100_1111 
 	SFRPAGE = 0x00;
 
-	// Configure pins 2.4, 2.5, and 2.6 for inputs 
+	/* Configure I/0 for P1 register:
+	* 1.0 - LCD Enable2 | out
+	* 1.1 - LDC RS		| out
+	* 1.2 - Stop button | in
+	* 1.3 - Auto button | in
+	* 1.4 - Flip button | in
+	* 1.5 - D-pad up	| in
+	* 1.6 - D-pad down	| in
+	* 1.7 - D-pad left	| in
+	*/
 	SFRPAGE = 0x20;
-	P2MDIN |= 0x70;				// 0111_0000
+	P1MDOUT |= 0x03; 			// 0000_0011 
+	SFRPAGE = 0x00;
+	SFRPAGE = 0x20;
+	P1MDIN  |= 0xFC; 			// 1111_1100 
+	SFRPAGE = 0x00;
+
+	/* Configure I/0 for P1 register:
+	* 2.0 - D-pad right	| in
+	* 2.1 - Hatpic		| out
+	* 2.2 - Analog		| N/A
+	* 2.3 - IR Recieve	| in
+	* 2.4 - Stop LED	| out
+	* 2.5 - Auto LED	| out
+	* 2.6 - Analog		| N/A
+	*/
+	SFRPAGE = 0x20;
+	P2MDOUT |= 0x32; 			// 0011_0010 
+	SFRPAGE = 0x00;
+	SFRPAGE = 0x20;
+	P2MDIN  |= 0x09; 			// 0000_1001 
+	SFRPAGE = 0x00;
+
+	/* Configure I/0 for P3 register:
+	* 3.0 - Eco button		| in
+	* 3.1 - Turn LED		| out
+	* 3.2 - Forward LED		| out
+	* 3.3 - Reverse LED		| out
+	* 3.7 - Eco LED			| out
+	*/
+	SFRPAGE = 0x20;
+	P3MDOUT |= 0x8E; 			// 1000_1110 
+	SFRPAGE = 0x00;
+	SFRPAGE = 0x20;
+	P3MDIN  |= 0x01; 			// 0000_0001 
 	SFRPAGE = 0x00;
 
 	LCD_4BIT(1);
 	LCD_4BIT(2);
-	InitPinADC(2, 2);
-	InitPinADC(2, 3);
-
+	InitADC();
 	waitms(500);
+	InitPinADC(2, 6);
+	InitPinADC(2, 2);
 
-	printf("\x1b[2J"); // Clear screen using ANSI escape sequence.
-
-	printf("ADC test program\n"
-		"File: %s\n"
-		"Compiled: %s, %s\n\n",
-		__FILE__, __DATE__, __TIME__);
+	LCDprint("LCD2", 1, 1, 1);
+	LCDprint("LCD1", 1, 1, 2);
 
 	while (1) {
-
+		//function buttons detection
 		if (eco_dbc == 1 && !ECO_BUT)
 			eco = eco ? 0 : 1;
 		eco_dbc = ECO_BUT;
@@ -578,22 +666,52 @@ void main(void){
 			aut = aut ? 0 : 1;
 		aut_dbc = AUTO_BUT;
 
-		if (rot_dbc == 1 && !FLIP_BUT)
-			rot = rot ? 0 : 1;
-		rot_dbc = FLIP_BUT;
+		if (flip_dbc == 1 && !FLIP_BUT)
+			flip = flip ? 0 : 1;
+		flip_dbc = FLIP_BUT;
 
 		if (stop_dbc == 1 && !STOP_BUT)
 			stop = stop ? 0 : 1;
 		stop_dbc = STOP_BUT;
 
+		//dpad edge detection
+		if (dpad_up_dbc == 1 && !DPAD_UP)
+			dpad_up_edge = 1;
+		else
+			dpad_up_edge = 0;
+		dpad_up_dbc = DPAD_UP;
+
+		if (dpad_down_dbc == 1 && !DPAD_DOWN)
+			dpad_down_edge = 1;
+		else
+			dpad_down_edge = 0;
+		dpad_down_dbc = DPAD_DOWN;
+
+		if (dpad_right_dbc == 1 && !DPAD_RIGHT)
+			dpad_right_edge = 1;
+		else
+			dpad_right_edge = 0;
+		dpad_right_dbc = DPAD_RIGHT;
+
+		if (dpad_left_dbc == 1 && !DPAD_LEFT)
+			dpad_left_edge = 1;
+		else
+			dpad_left_edge = 0;
+		dpad_left_dbc = DPAD_LEFT;
+
+		ECO_LED = eco;
+		AUTO_LED = aut;
+		FLIP_LED = flip;
+		BKW_LED = stop;
+
 		IR_data = (IR_data & ~(1 << 8))  | (eco  <<  8);
 		IR_data = (IR_data & ~(1 << 9))  | (aut  <<  9);
-		IR_data = (IR_data & ~(1 << 10)) | (rot  << 10);
+		IR_data = (IR_data & ~(1 << 10)) | (flip  << 10);
 		IR_data = (IR_data & ~(1 << 11)) | (stop << 11);
 
-		direction = Volts_at_Pin(QFP32_MUX_P2_2);
-		rotation = Volts_at_Pin(QFP32_MUX_P2_3);
-		
+		direction = ADC_at_Pin(QFP32_MUX_P2_6);
+		rotation = ADC_at_Pin(QFP32_MUX_P2_2);
+		printf("Direction: %u, Rotation: %u\n", direction, rotation);
 		i2c_read_addr8_data16(radar_addr, &i2c_buff);
 
 		if (i2c_buff < 10000) {
@@ -605,65 +723,51 @@ void main(void){
 
 		//Screen 2 GUI
 		IR_data = (IR_data & ~0x0007) | Arrows(direction, 3, screen2_ln1);
-		IR_data = (IR_data & ~0x0038) | (Arrows(rotation, 12, screen2_ln2) << 3);
+		IR_data = (IR_data & ~0x0038) | (Arrows(rotation, 12, screen2_ln1) << 3);
 
 		//Screen 1 GUI
 		switch (path) {
 		case PATH1:
-			if (refresh_acc > 10) {
-				LCDprint(">Path1  Path2", 1, 1, 1);
-				LCDprint(" Path3  Path4", 2, 1, 1);
-			}
-			if (DPAD_DOWN || DPAD_UP)
+			LCDprint(">Path1  Path2", 1, 1, 1);
+			LCDprint(" Path3  Path4", 2, 1, 1);
+			if (dpad_down_edge || dpad_up_edge)
 				path = PATH3;
-			else if (DPAD_LEFT || DPAD_RIGHT)
+			else if (dpad_left_edge || dpad_right_edge)
 				path = PATH2;
 			break;
 		case PATH2:
-			if (refresh_acc > 10) {
-				LCDprint(" Path1 >Path2", 1, 1, 1);
-				LCDprint(" Path3  Path4", 2, 1, 1);
-			}
-			if (DPAD_DOWN || DPAD_UP)
+			LCDprint(" Path1 >Path2", 1, 1, 1);
+			LCDprint(" Path3  Path4", 2, 1, 1);
+			if (dpad_down_edge || dpad_up_edge)
 				path = PATH4;
-			else if (DPAD_LEFT || DPAD_RIGHT)
+			else if (dpad_left_edge || dpad_right_edge)
 				path = PATH1;
 			break;
 		case PATH3:
-			if (refresh_acc > 10) {
-				LCDprint(" Path1  Path2", 1, 1, 1);
-				LCDprint(">Path3  Path4", 2, 1, 1);
-			}
-			if (DPAD_DOWN || DPAD_UP)
+			LCDprint(" Path1  Path2", 1, 1, 1);
+			LCDprint(">Path3  Path4", 2, 1, 1);
+			if (dpad_down_edge || dpad_up_edge)
 				path = PATH1;
-			else if (DPAD_LEFT || DPAD_RIGHT)
+			else if (dpad_left_edge || dpad_right_edge)
 				path = PATH4;
 			break;
 		case PATH4:
-			if (refresh_acc > 10) {
-				LCDprint(" Path1  Path2", 1, 1, 1);
-				LCDprint(" Path3 >Path4", 2, 1, 1);
-			}
-			if (DPAD_DOWN || DPAD_UP)
-				path = PATH3;
-			else if (DPAD_LEFT || DPAD_RIGHT)
+			LCDprint(" Path1  Path2", 1, 1, 1);
+			LCDprint(" Path3 >Path4", 2, 1, 1);
+
+			if (dpad_down_edge || dpad_up_edge)
 				path = PATH2;
+			else if (dpad_left_edge || dpad_right_edge)
+				path = PATH3;
 			break;
 		default:
-			if (refresh_acc > 10) {
-				LCDprint("ERROR", 1, 1, 1);
-				LCDprint("ERROR", 2, 1, 1);
-			}
+			LCDprint("ERROR", 1, 1, 1);
+			LCDprint("ERROR", 2, 1, 1);
 		}
 		IR_data = (IR_data & ~(3 << 6)) | (path << 6);
 		
-		//bottlenecked by IR transmission so loop which runs 30-50ms, therefore wait 300-500ms before writing the LCD
-		if (refresh_acc > 10) {
-			LCDprint(screen2_ln1, 1, 1, 2);
-			LCDprint(screen2_ln2, 2, 1, 2);
-			refresh_acc = 0;
-		}
-		else refresh_acc++;
+		LCDprint(screen2_ln1, 1, 1, 2);
+		LCDprint(screen2_ln2, 2, 1, 2);
 
 		Send_16bit(IR_data);
 	}
