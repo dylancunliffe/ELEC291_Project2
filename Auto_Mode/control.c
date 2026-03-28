@@ -19,28 +19,36 @@ static int32_t prev_error = 0;
 // main control loop calculations
 void Follow_Line(int32_t error)
 {
-	int32_t left_speed;
-	int32_t right_speed;
+	int32_t left_speed = 500;
+	int32_t right_speed = 500;
+	Motors_SetSpeed(left_speed, right_speed);
 
-    int32_t derror = error - prev_error;
+    //int32_t derror = error - prev_error;
 
-    int32_t u = (KP * error + KD * derror) / GAIN_DIV;
+    //int32_t u = (KP * error + KD * derror) / GAIN_DIV;
 
-    prev_error = error;
-
+    //prev_error = error;
+/*
+	if (error<-10){
+		left_speed=200;
+		right_speed=0;
+		Motors_SetSpeed(left_speed, right_speed);
+	}
+	else if (error >10){
+		left_speed= 0;
+		right_speed = 200;
+		Motors_SetSpeed(left_speed, right_speed);
+	}
+*/
     // change pwm going into right motor
 
-    left_speed = BASE - u;
-    right_speed = BASE + u;
-    Motors_SetSpeed(left_speed, right_speed);
+    //left_speed = BASE - u;
+    //right_speed = BASE + u;
+
+
+    //Motors_SetSpeed(left_speed, right_speed);
     // change pwm going into left motor
 }
 
-// need to set base speed in main!!!!!!!!
-// and then we can call this in main like this:
-//int32_t error = Sensors_Get_Error();
-//int32_t u = Control_Compute(error);
-//int32_t left  = base + u;
-//int32_t right = base - u;
-//Motors_SetSpeed(left, right); (or whatever our function name ends up being)
+
 

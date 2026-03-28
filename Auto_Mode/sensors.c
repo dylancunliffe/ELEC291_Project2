@@ -44,11 +44,11 @@ void Sensors_Update(uint16_t left, uint16_t right, uint16_t center)
     // averaged data, might change this later depending on how fast adc sampling is
     // 50% new, 50% old
     // Lf = (Lraw + 3 * Lf) / 4;
-    Lf = (2*Lraw + 2*Lf) /4;
+    Lf = Lraw;
     // Cf = (Craw + 3 * Cf) / 4;
-    Cf = (2* Craw + 2* Cf) / 4;
+    Cf = Craw;
     // Rf = (Rraw + 3 * Rf) / 4;
-    Rf = (2* Rraw + 2 * Rf) /4;
+    Rf = Rraw;
 
     // sum
     sum = Lf + Rf; //can maybe add the readings from the middle inductor?
@@ -59,7 +59,7 @@ void Sensors_Update(uint16_t left, uint16_t right, uint16_t center)
         line_detected = 1;
 
         // normalized error
-        error = (SCALE * (Lf - Rf)) / sum; //want error to be as close to 0 as possible, might be different based on the postion of inductor on the car
+        error = (Lf - Rf); //want error to be as close to 0 as possible, might be different based on the postion of inductor on the car
     }
     else
     {
