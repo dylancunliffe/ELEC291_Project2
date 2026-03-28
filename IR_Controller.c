@@ -27,6 +27,7 @@
 #define ECO_LED		P3_7
 #define FLIP_LED	P3_1
 #define AUTO_LED	P2_5
+#define HAPTIC		P2_1
 
 #define DPAD_UP		P1_5
 #define DPAD_DOWN	P1_6
@@ -577,6 +578,7 @@ void main(void){
 	bit flip = 0;
 	bit stop_dbc = 0;
 	bit stop = 0;
+	bit haptic_state = 1;
 
 	unsigned int direction = 0; //14 bit adc reading
 	unsigned int rotation = 0;  //14 bit adc reading
@@ -657,6 +659,11 @@ void main(void){
 	LCDprint("LCD1", 1, 1, 2);
 
 	while (1) {
+
+		//haptic pin, we need to have something change haptic_state, but this is still undetermined.
+		if (haptic_state) HAPTIC = 1;
+		else HAPTIC = 0;
+
 		//function buttons detection
 		if (eco_dbc == 1 && !ECO_BUT)
 			eco = eco ? 0 : 1;
