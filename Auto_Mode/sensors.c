@@ -37,18 +37,18 @@ static int intersection_count;
 void Sensors_Update(uint16_t left, uint16_t right, uint16_t center)
 {
     // read raw values form adc channels
-    int32_t Lraw = (int32_t)left;
-    int32_t Craw = (int32_t)center;
-    int32_t Rraw = (int32_t)right;
+    int16_t Lraw = (int16_t)left;
+    int16_t Craw = (int16_t)center;
+    int16_t Rraw = (int16_t)right;
 
     // averaged data, might change this later depending on how fast adc sampling is
     // 50% new, 50% old
     // Lf = (Lraw + 3 * Lf) / 4;
-    Lf = Lraw;
+    Lf = (2*Lraw + 2*Lf) /4;
     // Cf = (Craw + 3 * Cf) / 4;
-    Cf = Craw;
+    Cf = (2* Craw + 2* Cf) / 4;
     // Rf = (Rraw + 3 * Rf) / 4;
-    Rf = Rraw;
+    Rf = (2* Rraw + 2 * Rf) /4;
 
     // sum
     sum = Lf + Rf; //can maybe add the readings from the middle inductor?
@@ -81,7 +81,7 @@ void Sensors_Update(uint16_t left, uint16_t right, uint16_t center)
 }
 
 // "getter" functions to use in main and such
-int32_t Sensors_Get_Error(void)
+int16_t Sensors_Get_Error(void)
 {
     return error;
 }
@@ -95,13 +95,13 @@ uint8_t Sensors_IntersectionDetected(void)
 {
     return intersection_detected;
 }
-int32_t Sensors_Get_IntersectionCount(void)
+int16_t Sensors_Get_IntersectionCount(void)
 {
     return intersection_count;
 }
 
 // for debugging
-int32_t Sensors_Get_Left(void)   { return Lf; }
-int32_t Sensors_Get_Center(void) { return Cf; }
-int32_t Sensors_Get_Right(void)  { return Rf; }
-int32_t Sensors_Get_Sum(void)    { return sum; }
+int16_t Sensors_Get_Left(void)   { return Lf; }
+int16_t Sensors_Get_Center(void) { return Cf; }
+int16_t Sensors_Get_Right(void)  { return Rf; }
+int16_t Sensors_Get_Sum(void)    { return sum; }
