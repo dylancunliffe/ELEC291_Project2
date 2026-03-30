@@ -14,14 +14,15 @@ BLUE, GRAY = (0, 150, 255), (60, 60, 60)
 YELLOW, DARK_BLUE = (255, 255, 0), (0, 50, 100)
 
 pygame.init()
-screen = pygame.display.set_mode((900, 800)) # Extra height for the new layout
-pygame.display.set_caption("EFM8 Telemetry - Reorganized v4")
+screen = pygame.display.set_mode((900, 800))
+pygame.display.set_caption("Telemetry System - Car & Controller")
 
 font = pygame.font.SysFont("Consolas", 18)
 header_font = pygame.font.SysFont("Consolas", 26, bold=True)
 mode_font = pygame.font.SysFont("Consolas", 22, bold=True)
 
-# Shared State - EXACT ORDER of your printf
+# Shared State - EXACT ORDER of your printf:
+# drive, eco_m, ai_m, rot_m, car_hb, ctrl_hb, spk, inter, b_eco, b_ai, b_rot, b_stop, b_up, b_down, b_left, b_right, v, h, tof, i1, i2, i3
 telemetry = {
     "drive": 0, "eco_m": 0, "ai_m": 0, "rot_m": 0, "car_hb": 0, "ctrl_hb": 0, 
     "spk": 0, "inter": 0, "b_eco": 0, "b_ai": 0, "b_rot": 0, "b_stop": 0,
@@ -47,7 +48,7 @@ def serial_handler():
                         keys = list(telemetry.keys())
                         for i in range(len(keys)):
                             val = parts[i]
-                            # Indices 0-18 are ints (Drive to TOF), 19-21 are floats (Inductors)
+                            # Indices 0-18 are ints, 19-21 are inductor floats
                             telemetry[keys[i]] = float(val) if i >= 19 else int(val)
     except Exception as e: print(f"Serial Error: {e}")
 
@@ -76,59 +77,54 @@ while running:
             if key_char in ['w', 'a', 's', 'd', 'm']:
                 last_key = key_char.upper()
                 if key_char == 'm': computer_mode = not computer_mode
-                if ser and ser.is_open: ser.write(key_char.encode())
+                if ser and ser.is_open:
+                    ser.write(key_char.encode()) # Sends 'w','a','s','d', or 'm' as a byte
 
-    # --- 1. HEADER ---
-    render_text("CAR TELEMETRY SYSTEM", 280, 20, WHITE, header=True)
+    # 1. HEADER
+    render_text("CAR & CONTROLLER TELEMETRY SYSTEM", 200, 20, WHITE, header=True)
     pygame.draw.line(screen, BLUE, (50, 60), (850, 60), 2)
     
-    # --- 2. TOP LEFT: MODES & SPEAKER ---
+    # 2. TOP LEFT: MODES
     lx = 50
-    render_text(f"Drive: {['FWD', 'REV', 'TRN', 'STP'][telemetry['drive']%4]}", lx, 90)
+    render_text(f"Drive State: {['FWD', 'REV', 'TRN', 'STP'][telemetry['drive']%4]}", lx, 90)
     render_text(f"ECO Mode: {'ACTIVE' if telemetry['eco_m'] else 'OFF'}", lx, 120, GREEN if telemetry['eco_m'] else WHITE)
     render_text(f"AI Mode:  {'ACTIVE' if telemetry['ai_m'] else 'OFF'}", lx, 150, GREEN if telemetry['ai_m'] else WHITE)
     render_text(f"ROT Mode: {'ACTIVE' if telemetry['rot_m'] else 'OFF'}", lx, 180, GREEN if telemetry['rot_m'] else WHITE)
     render_text(f"Speaker:  {'ON' if telemetry['spk'] else 'OFF'}", lx, 210, YELLOW if telemetry['spk'] else WHITE)
 
-    # --- 3. TOP RIGHT: SENSORS, INTERSECTION, HB ---
+    # 3. TOP RIGHT: SENSORS
     rx = 450
     render_text(f"TOF Range: {telemetry['tof']}mm", rx, 90)
     render_text(f"Inductors: {telemetry['ind1']:.2f}V | {telemetry['ind2']:.2f}V | {telemetry['ind3']:.2f}V", rx, 120, YELLOW)
     render_text(f"Intersection: {'YES' if telemetry['inter'] else 'NO'}", rx, 150, GREEN if telemetry['inter'] else WHITE)
-    
-    # Heartbeats
     render_text("Car Heartbeat:", rx, 185); pygame.draw.circle(screen, GREEN if telemetry['car_hb'] else RED, (rx + 160, 195), 8)
     render_text("Ctrl Heartbeat:", rx, 215); pygame.draw.circle(screen, GREEN if telemetry['ctrl_hb'] else RED, (rx + 160, 225), 8)
 
-    # --- 4. BUTTON GROUPS (BELOW TOP SECTIONS) ---
-    # Left Side: Mode/Stop Buttons (under Speaker)
+    # 4. BUTTONS
     render_text("MODE / STOP BUTTONS", 50, 280, GRAY)
-    mode_btns = [("ECO", "b_eco"), ("AI", "b_ai"), ("ROT", "b_rot"), ("STOP", "b_stop")]
-    for i, (label, key) in enumerate(mode_btns):
-        btn_color = (RED if telemetry[key] else GRAY) if label == "STOP" else (GREEN if telemetry[key] else GRAY)
-        pygame.draw.rect(screen, btn_color, (50 + (i*100), 310, 80, 40), 2 if not telemetry[key] else 0)
+    m_btns = [("ECO", "b_eco"), ("AI", "b_ai"), ("ROT", "b_rot"), ("STOP", "b_stop")]
+    for i, (label, key) in enumerate(m_btns):
+        btn_c = (RED if telemetry[key] else GRAY) if label == "STOP" else (GREEN if telemetry[key] else GRAY)
+        pygame.draw.rect(screen, btn_c, (50 + (i*100), 310, 80, 40), 2 if not telemetry[key] else 0)
         render_text(label, 65 + (i*100), 320, WHITE if telemetry[key] else GRAY)
 
-    # Right Side: Direction Buttons (under Heartbeats)
     render_text("DIRECTIONAL BUTTONS", 450, 280, GRAY)
-    dir_btns = [("UP", "b_up"), ("DOWN", "b_down"), ("LEFT", "b_left"), ("RIGHT", "b_right")]
-    for i, (label, key) in enumerate(dir_btns):
+    d_btns = [("UP", "b_up"), ("DOWN", "b_down"), ("LEFT", "b_left"), ("RIGHT", "b_right")]
+    for i, (label, key) in enumerate(d_btns):
         color = GREEN if telemetry[key] else GRAY
         pygame.draw.rect(screen, color, (450 + (i*100), 310, 80, 40), 2 if not telemetry[key] else 0)
         render_text(label, 465 + (i*100), 320, WHITE if telemetry[key] else GRAY)
 
-    # --- 5. VISUALS (POTS & COMPUTER MODE) ---
+    # 5. POTS & COMPUTER MODE
     draw_centered_pot("V-POT", telemetry['vert'], 100, 500, vertical=True)
     draw_centered_pot("H-POT", telemetry['horz'], 250, 560, vertical=False)
 
-    # Command Monitor
-    render_text(f"LAST COMMAND: {last_key}", 600, 510, YELLOW)
+    render_text(f"LAST KEY SENT: {last_key}", 600, 510, YELLOW)
     mode_color = GREEN if computer_mode else RED
     pygame.draw.rect(screen, DARK_BLUE, (600, 550, 250, 120), 0, 10)
     pygame.draw.rect(screen, mode_color, (600, 550, 250, 120), 3, 10)
     screen.blit(mode_font.render("COMPUTER MODE", True, mode_color), (635, 570))
     render_text("Type: W, A, S, D, M", 640, 610, GRAY)
-    if computer_mode: render_text("SENDING ACTIVE", 660, 640, GREEN)
 
     pygame.display.flip()
 
