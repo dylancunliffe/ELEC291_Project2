@@ -34,7 +34,7 @@ ser = None
 is_connected = False
 key_states = {'w': 0, 'a': 0, 's': 0, 'd': 0}
 mcu_feedback = "Searching for MCU..."
-last_sent_bits = "00000000" # This is the REAL output to hardware
+last_sent_bits = "00000000" 
 
 # Recall & Recording Logic
 recorded_path = [] 
@@ -50,12 +50,13 @@ turn_speed = 1.5
 base_velocity = 0.25 
 
 def get_bit_list():
-    # M bit is 0 if Disabled, 1 if Enabled or Recall
+    # M bit logic: 1 if Enabled or Recall
     m_bit = 1 if system_mode > 0 else 0
+    # SWAPPED: Bit 5 is now Eco, Bit 6 is now System Mode (M-bit)
     return [
         ('W', key_states['w']), ('A', key_states['a']), 
         ('S', key_states['s']), ('D', key_states['d']),
-        ('E', eco_toggle), ('M', m_bit), 
+        ('E', m_bit), ('M', eco_toggle), 
         ('R', rot_toggle), ('L', led_toggle)
     ]
 
@@ -65,10 +66,7 @@ def get_bit_string():
 def send_command(manual_cmd=None):
     global is_connected, last_sent_bits
     cmd_str = manual_cmd if manual_cmd else get_bit_string()
-    
-    # Update the LIVE output variable
     last_sent_bits = cmd_str 
-    
     if ser and ser.is_open:
         try:
             ser.write((cmd_str + '\n').encode())
@@ -83,7 +81,6 @@ def run_replay():
     for cmd in recorded_path:
         send_command(manual_cmd=cmd)
         time.sleep(0.016) 
-    # Return to silent state after replay
     is_replaying = False
 
 def serial_monitor():
@@ -129,12 +126,10 @@ def draw_pot(label, val, x, y, vertical=True):
 def update_tron_physics():
     global car_x, car_y, car_angle
     if system_mode != 2 and not is_replaying: return
-    
     eco_mod = 0.5 if eco_toggle else 1.0
     current_turn = turn_speed * eco_mod
     current_vel = base_velocity * eco_mod
     old_x, old_y = car_x, car_y
-
     if rot_toggle:
         car_angle += current_turn * 1.5
     else:
@@ -147,10 +142,8 @@ def update_tron_physics():
         if key_states['s']:
             car_x -= math.cos(rad) * current_vel
             car_y -= math.sin(rad) * current_vel
-    
     car_x %= 400
     car_y %= 400
-    
     if not rot_toggle and (key_states['w'] or key_states['s']):
         if abs(car_x - old_x) < 50 and abs(car_y - old_y) < 50:
             pygame.draw.line(tron_surf, TRON_CYAN, (old_x, old_y), (car_x, car_y), 2)
@@ -160,12 +153,8 @@ clock = pygame.time.Clock()
 
 while running:
     screen.fill(BLACK)
-    
-    # This bitstring is for visualization (what's happening in the UI)
     ui_bits = get_bit_string() if system_mode > 0 else "00000000"
     
-    # SILENCE LOGIC: If we are in Recall mode and NOT replaying, 
-    # the LIVE hardware output must stay locked at all 0s.
     if not is_replaying and (system_mode == 2 or system_mode == 0):
         last_sent_bits = "00000000"
     elif system_mode == 1 and not is_replaying:
@@ -183,11 +172,11 @@ while running:
                 key_states[k] = 1
                 if system_mode == 1: send_command()
             elif k == 'e': 
-                eco_toggle = 1 - eco_toggle
-                if system_mode == 1: send_command()
-            elif k == 'm': 
                 system_mode = (system_mode + 1) % 3
                 if system_mode != 2: is_recording = False 
+                if system_mode == 1: send_command()
+            elif k == 'm': 
+                eco_toggle = 1 - eco_toggle
                 if system_mode == 1: send_command()
             elif k == 'r': 
                 rot_toggle = 1 - rot_toggle
@@ -212,7 +201,6 @@ while running:
                 key_states[k] = 0
                 if system_mode == 1: send_command()
 
-    # BUFFERING: Store the UI intended bits while drawing
     if system_mode == 2 and is_recording and not is_replaying:
         recorded_path.append(ui_bits)
 
@@ -235,10 +223,11 @@ while running:
     draw_key("A", key_states['a'], bx, by + 80)
     draw_key("S", key_states['s'], bx + 65, by + 80)
     draw_key("D", key_states['d'], bx + 130, by + 80)
-    draw_key("ECO(E)", eco_toggle, bx + 210, by)
     
+    # UI updated to match physical key map
+    draw_key("ECO(M)", eco_toggle, bx + 210, by)
     en_col = YELLOW if system_mode == 2 else (GREEN if system_mode == 1 else LIGHT_GRAY)
-    draw_key("EN(M)", 1 if system_mode > 0 else 0, bx + 210, by + 80, custom_color=en_col)
+    draw_key("EN(E)", 1 if system_mode > 0 else 0, bx + 210, by + 80, custom_color=en_col)
     
     draw_key("ROT(R)", rot_toggle, bx + 285, by)
     draw_key("LED(L)", led_toggle, bx + 285, by + 80)
@@ -275,17 +264,13 @@ while running:
 
     buffer_color = RED if is_recording else (YELLOW if system_mode == 2 else WHITE)
     draw_text(f"BUFFER SIZE: {len(recorded_path)} steps", tx, ty + 420, buffer_color)
-    
-    # VISUAL PROOF: LIVE OUTPUT vs UI INTENT
-    # During drawing in Recall, LIVE will be all 0s. During Replay, it will change.
     draw_text(f"LIVE HW OUTPUT: {last_sent_bits}", tx, ty + 445, TRON_CYAN)
     
     if system_mode == 2:
         draw_text("[B] TOGGLE RECORD | [N] REPLAY | [Q] RESET", tx, ty + 475, LIGHT_GRAY)
 
     draw_text("BITSTREAM DECODER (INTENDED):", 80, 580, LIGHT_GRAY)
-    
-    # Render decoder based on ui_bits (shows what you ARE DRAWING)
+    # The decoder will now render E and M in the correct physical bitstream order
     for i, (label, _) in enumerate(get_bit_list()):
         val = int(ui_bits[i])
         x_p, y_p = 100 + (i * 90), 620
