@@ -27,12 +27,11 @@
 #define ECO_LED		P3_7
 #define FLIP_LED	P3_1
 #define AUTO_LED	P2_5
-#define HAPTIC		P2_1
 
-#define DPAD_UP		P1_5
-#define DPAD_DOWN	P1_6
-#define DPAD_LEFT	P1_7
-#define DPAD_RIGHT	P2_0
+#define PATH1		P1_5
+#define PATH2		P1_6
+#define PATH3		P1_7
+#define ENTER		P2_0
 
 #define ECO_BUT		P3_0
 #define AUTO_BUT	P1_3
@@ -45,10 +44,10 @@ unsigned char key1, key2;
 volatile int offset;
 
 typedef enum {
-	PATH1 = 0,
-	PATH2 = 1,
-	PATH3 = 2,
-	PATH4 = 3
+	PATH_1 = 0,
+	PATH_2 = 1,
+	PATH_3 = 2,
+	IDLE
 } path_select;
 
 char _c51_external_startup(void)
@@ -174,9 +173,9 @@ void waitms(unsigned int ms)
 
  //SEND THIS BEFORE EVERY TRANSMISSION
 void Send_Header() {
-	IR_PIN = 0;
-	waitms(9);  // 9ms Mark
 	IR_PIN = 1;
+	waitms(9);  // 9ms Mark
+	IR_PIN = 0;
 	waitms(4);  // 4.5ms Space
 	Timer3us(250);
 	Timer3us(250);
@@ -188,6 +187,10 @@ void Send_Footer() {
 	Timer3us(250);
 	Timer3us(60);
 	IR_PIN = 1;
+	Timer3us(250);
+	Timer3us(250);
+	Timer3us(60);
+	IR_PIN = 0;
 }
 
 //sends 8 bits of information over IR
@@ -406,10 +409,10 @@ unsigned char Arrows(unsigned int input_adc, int offset, char* string) {
 		degree = 0x04;
 		if (input_adc > frac * 4) {
 			string[offset + 2] = '>';
-			degree = 0x04;
+			degree = 0x05;
 			if (input_adc >= ADC_MAX) {
 				string[offset + 3] = '>';
-				degree = 0x04;
+				degree = 0x06;
 			}
 		}
 	}
@@ -452,101 +455,9 @@ int getsn(char* buff, int len)
 	return len;
 }
 
-/********************
- * I2C SECTION		*
- ********************/
+void main(void) {
 
-void Wait_SI(void)
-{
-	unsigned int I2C_t = 5000;
-	while ((!SI) && (I2C_t > 0)) I2C_t--;
-}
-
-void Wait_STO(void)
-{
-	unsigned int I2C_t = 5000;
-	while ((STO) && (I2C_t > 0)) I2C_t--;
-}
-
-void I2C_write(unsigned char output_data)
-{
-	SMB0DAT = output_data; // Put data into buffer
-	SI = 0;  // Proceed with write
-	Wait_SI(); // Wait until done with send
-}
-
-unsigned char I2C_read(bit ack)
-{
-	ACK = ack;
-	SI = 0; // Proceed with read
-	Wait_SI(); // Wait until done with read
-	return SMB0DAT;
-}
-
-void I2C_start(void)
-{
-	ACK = 0;
-	STO = 0;
-	STA = 1; // Send I2C start
-	SI = 0; // Proceed with start
-	Wait_SI(); // Wait until done with start
-}
-
-void I2C_stop(void)
-{
-	ACK = 0;
-	STA = 0;
-	STO = 1; // Perform I2C stop
-	SI = 0; // Proceed with stop
-	Wait_STO(); // Wait until done with stop
-	STO = 0;
-}
-
-bit i2c_read_addr8_data8(unsigned char address, unsigned char* value)
-{
-	I2C_start();
-	I2C_write(0x52); // Write address
-	I2C_write(address);
-	I2C_stop();
-
-	I2C_start();
-	I2C_write(0x53); // Read address
-	*value = I2C_read(1);
-	I2C_stop();
-
-	return 1;
-}
-
-bit i2c_read_addr8_data16(unsigned char address, unsigned int* value)
-{
-	I2C_start();
-	I2C_write(0x52); // Write address
-	I2C_write(address);
-	I2C_stop();
-
-	I2C_start();
-	I2C_write(0x53); // Read address
-	*value = I2C_read(0) * 256;
-	*value += I2C_read(1);
-	I2C_stop();
-
-	return 1;
-}
-
-bit i2c_write_addr8_data8(unsigned char address, unsigned char value)
-{
-	I2C_start();
-	I2C_write(0x52); // Write address
-	I2C_write(address);
-	I2C_write(value);
-	I2C_stop();
-
-	return 1;
-}
-
-void main(void){
-
-	unsigned int IR_data = 0;
+	unsigned int IR_data = 0xF000;
 	/*************************************************************************************
 	* bits | Description
 	* ------------------------------------------------------------------------------------
@@ -557,18 +468,19 @@ void main(void){
 	*   9  | auto
 	*   10 | rotate 180
 	*   11 | stop
-	* 10-15| unassigned
+	* 12-15| 0b1000 address
 	**************************************************************************************/
 
-	path_select path = PATH1;
-	bit dpad_up_dbc = 0;
-	bit dpad_up_edge = 0;
-	bit dpad_down_dbc = 0;
-	bit dpad_down_edge = 0;
-	bit dpad_right_dbc = 0;
-	bit dpad_right_edge = 0;
-	bit dpad_left_dbc = 0;
-	bit dpad_left_edge = 0;
+	path_select path_sel = PATH_1;
+	path_select path = IDLE;
+	bit path1_dbc = 0;
+	bit path1_edge = 0;
+	bit path2_dbc = 0;
+	bit path2_edge = 0;
+	bit path3_dbc = 0;
+	bit path3_edge = 0;
+	bit enter_dbc = 0;
+	bit enter_edge = 0;
 
 	bit eco_dbc = 0;
 	bit eco = 0;
@@ -577,15 +489,14 @@ void main(void){
 	bit flip_dbc = 0;
 	bit flip = 0;
 	bit stop_dbc = 0;
-	bit stop = 0;
-	bit haptic_state = 1;
+	bit stop = 1;
 
 	unsigned int direction = 0; //14 bit adc reading
 	unsigned int rotation = 0;  //14 bit adc reading
 	char screen2_ln1[CHARS_PER_LINE + 1] = "   D        R   ";
 	char screen2_ln2[CHARS_PER_LINE + 1] = "Speed: X.XXX m/s";
-	volatile unsigned int i2c_buff;
-	const unsigned char radar_addr = 0x00; //temporary until if get the real address
+	char screen1_ln1[CHARS_PER_LINE + 1] = "PATH: X [enter?]";
+	unsigned char temp = 0;
 
 	/* Configure I/0 for P1 register:
 	* 0.0 - IR Transmit	| out
@@ -659,11 +570,6 @@ void main(void){
 	LCDprint("LCD1", 1, 1, 2);
 
 	while (1) {
-
-		//haptic pin, we need to have something change haptic_state, but this is still undetermined.
-		if (haptic_state) HAPTIC = 1;
-		else HAPTIC = 0;
-
 		//function buttons detection
 		if (eco_dbc == 1 && !ECO_BUT)
 			eco = eco ? 0 : 1;
@@ -681,101 +587,148 @@ void main(void){
 			stop = stop ? 0 : 1;
 		stop_dbc = STOP_BUT;
 
-		//dpad edge detection
-		if (dpad_up_dbc == 1 && !DPAD_UP)
-			dpad_up_edge = 1;
-		else
-			dpad_up_edge = 0;
-		dpad_up_dbc = DPAD_UP;
-
-		if (dpad_down_dbc == 1 && !DPAD_DOWN)
-			dpad_down_edge = 1;
-		else
-			dpad_down_edge = 0;
-		dpad_down_dbc = DPAD_DOWN;
-
-		if (dpad_right_dbc == 1 && !DPAD_RIGHT)
-			dpad_right_edge = 1;
-		else
-			dpad_right_edge = 0;
-		dpad_right_dbc = DPAD_RIGHT;
-
-		if (dpad_left_dbc == 1 && !DPAD_LEFT)
-			dpad_left_edge = 1;
-		else
-			dpad_left_edge = 0;
-		dpad_left_dbc = DPAD_LEFT;
-
-		ECO_LED = eco;
-		AUTO_LED = aut;
-		FLIP_LED = flip;
-		BKW_LED = stop;
-
-		IR_data = (IR_data & ~(1 << 8))  | (eco  <<  8);
-		IR_data = (IR_data & ~(1 << 9))  | (aut  <<  9);
-		IR_data = (IR_data & ~(1 << 10)) | (flip  << 10);
+		IR_data = (IR_data & ~(1 << 8)) | (eco << 8);
+		IR_data = (IR_data & ~(1 << 9)) | (aut << 9);
+		IR_data = (IR_data & ~(1 << 10)) | (flip << 10);
 		IR_data = (IR_data & ~(1 << 11)) | (stop << 11);
+
+		//dpad edge detection
+		if (path1_dbc == 1 && !PATH1)
+			path1_edge = 1;
+		else
+			path1_edge = 0;
+		path1_dbc = PATH2;
+
+		if (path2_dbc == 1 && !PATH2)
+			path2_edge = 1;
+		else
+			path2_edge = 0;
+		path2_dbc = PATH2;
+
+		if (path3_dbc == 1 && !PATH3)
+			path3_edge = 1;
+		else
+			path3_edge = 0;
+		path3_dbc = PATH3;
+
+		if (enter_dbc == 1 && !ENTER)
+			enter_edge = 1;
+		else
+			enter_edge = 0;
+		enter_dbc = ENTER;
+
+		if (path1_edge)
+			path_sel = PATH_1;
+		else if (path2_edge)
+			path_sel = PATH_2;
+		else if (path3_edge)
+			path_sel = PATH_3;
+
+		if (!aut && enter_edge)
+			path = path_sel;
+
+		IR_data = (IR_data & ~(3 << 6)) | (path << 6);
 
 		direction = ADC_at_Pin(QFP32_MUX_P2_6);
 		rotation = ADC_at_Pin(QFP32_MUX_P2_2);
-		printf("Direction: %u, Rotation: %u\n", direction, rotation);
-		i2c_read_addr8_data16(radar_addr, &i2c_buff);
-
-		if (i2c_buff < 10000) {
-			screen2_ln2[7]  = (char)((i2c_buff / 1000) + '0');
-			screen2_ln2[9]  = (char)(((i2c_buff / 100) % 10) + '0');
-			screen2_ln2[10] = (char)(((i2c_buff / 10) % 10) + '0');
-			screen2_ln2[11] = (char)((i2c_buff) % 10 + '0');
-		}
-
+		
 		//Screen 2 GUI
 		IR_data = (IR_data & ~0x0007) | Arrows(direction, 3, screen2_ln1);
 		IR_data = (IR_data & ~0x0038) | (Arrows(rotation, 12, screen2_ln1) << 3);
 
 		//Screen 1 GUI
-		switch (path) {
-		case PATH1:
-			LCDprint(">Path1  Path2", 1, 1, 1);
-			LCDprint(" Path3  Path4", 2, 1, 1);
-			if (dpad_down_edge || dpad_up_edge)
-				path = PATH3;
-			else if (dpad_left_edge || dpad_right_edge)
-				path = PATH2;
-			break;
-		case PATH2:
-			LCDprint(" Path1 >Path2", 1, 1, 1);
-			LCDprint(" Path3  Path4", 2, 1, 1);
-			if (dpad_down_edge || dpad_up_edge)
-				path = PATH4;
-			else if (dpad_left_edge || dpad_right_edge)
-				path = PATH1;
-			break;
-		case PATH3:
-			LCDprint(" Path1  Path2", 1, 1, 1);
-			LCDprint(">Path3  Path4", 2, 1, 1);
-			if (dpad_down_edge || dpad_up_edge)
-				path = PATH1;
-			else if (dpad_left_edge || dpad_right_edge)
-				path = PATH4;
-			break;
-		case PATH4:
-			LCDprint(" Path1  Path2", 1, 1, 1);
-			LCDprint(" Path3 >Path4", 2, 1, 1);
+		if (!aut) {
+			screen1_ln1[6] = (char)path_sel + '1';
 
-			if (dpad_down_edge || dpad_up_edge)
-				path = PATH2;
-			else if (dpad_left_edge || dpad_right_edge)
-				path = PATH3;
-			break;
-		default:
-			LCDprint("ERROR", 1, 1, 1);
-			LCDprint("ERROR", 2, 1, 1);
+			if (path == path_sel) {
+				screen1_ln1[8] = '<';
+				screen1_ln1[9] = 'c';
+				screen1_ln1[10] = 'h';
+				screen1_ln1[11] = 'o';
+				screen1_ln1[12] = 's';
+				screen1_ln1[13] = 'e';
+				screen1_ln1[14] = 'n';
+				screen1_ln1[15] = '>';
+			}
+			else {
+				screen1_ln1[8] = '<';
+				screen1_ln1[9] = 'a';
+				screen1_ln1[10] = 'l';
+				screen1_ln1[11] = 't';
+				screen1_ln1[12] = 'e';
+				screen1_ln1[13] = 'r';
+				screen1_ln1[14] = '?';
+				screen1_ln1[15] = '>';
+			}
 		}
-		IR_data = (IR_data & ~(3 << 6)) | (path << 6);
+		else {
+			screen1_ln1[6] = (char)path + '1';
+			
+			screen1_ln1[8] = '<';
+			screen1_ln1[9] = 'c';
+			screen1_ln1[10] = 'h';
+			screen1_ln1[11] = 'o';
+			screen1_ln1[12] = 's';
+			screen1_ln1[13] = 'e';
+			screen1_ln1[14] = 'n';
+			screen1_ln1[15] = '>';
+		}
+		LCDprint(screen1_ln1, 1, 1, 1);
+
+		temp = ((char)stop << 3) | ((char)aut << 2) | ((char)eco << 1) | ((char)flip);
+		switch (temp) {
+		case 0x00:
+			LCDprint(" ", 2, 1, 1);
+			break;
+		case 0x01:
+			LCDprint("        FLP", 2, 1, 1);
+			break;
+		case 0x02:
+			LCDprint("    ECO", 2, 1, 1);
+			break;
+		case 0x03:
+			LCDprint("    ECO FLP", 2, 1, 1);
+			break;
+		case 0x04:
+			LCDprint("AUT", 2, 1, 1);
+			break;
+		case 0x05:
+			LCDprint("AUT     FLP", 2, 1, 1);
+			break;
+		case 0x06:
+			LCDprint("AUT ECO", 2, 1, 1);
+			break;
+		case 0x07:
+			LCDprint("AUT ECO FLP", 2, 1, 1);
+			break;
+		case 0x08:
+			LCDprint("            STOP", 2, 1, 1);
+			break;
+		case 0x09:
+			LCDprint("        FLP STOP", 2, 1, 1);
+			break;
+		case 0x0A:
+			LCDprint("    ECO     STOP", 2, 1, 1);
+			break;
+		case 0x0B:
+			LCDprint("    ECO FLP STOP", 2, 1, 1);
+			break;
+		case 0x0C:
+			LCDprint("AUT         STOP", 2, 1, 1);
+			break;
+		case 0x0D:
+			LCDprint("AUT     FLP STOP", 2, 1, 1);
+			break;
+		case 0x0E:
+			LCDprint("AUT ECO     STOP", 2, 1, 1);
+			break;
+		case 0x0F:
+			LCDprint("AUT ECO FLP STOP", 2, 1, 1);
+			break;
+		}
 		
 		LCDprint(screen2_ln1, 1, 1, 2);
 		LCDprint(screen2_ln2, 2, 1, 2);
-
 		Send_16bit(IR_data);
 	}
 }
