@@ -2,59 +2,101 @@ import pygame
 import serial
 import threading
 import time
+import math
 
 # --- CONFIGURATION ---
-SERIAL_PORT = 'COM7' 
+SERIAL_PORT = 'COM8' 
 BAUD_RATE = 115200
-WIN_W, WIN_H = 1920, 1080 # Expanded width for new panels
+WIN_W, WIN_H = 1350, 750
+ROTATE_COOLDOWN = 2.0  # Seconds
 
 # Colors
 WHITE, BLACK = (255, 255, 255), (15, 15, 15)
-GREEN, RED = (0, 255, 0), (255, 50, 50)
-BLUE, LIGHT_GRAY = (100, 200, 255), (200, 200, 200)
-DARK_BLUE = (0, 30, 70)
+GREEN, RED, YELLOW = (0, 255, 0), (255, 50, 50), (255, 255, 0)
+BLUE, LIGHT_GRAY = (100, 200, 200), (200, 200, 200)
+DARK_BLUE, TRON_CYAN = (0, 30, 70), (0, 255, 255)
+GRAY = (100, 100, 100)
 
 pygame.init()
 screen = pygame.display.set_mode((WIN_W, WIN_H))
-pygame.display.set_caption("MCU Bitstream Controller (WASDE)")
+pygame.display.set_caption("MCU Bitstream Controller | Rotate Pulse & Cooldown")
 
-font = pygame.font.SysFont("Consolas", 18)
+font = pygame.font.SysFont("Consolas", 16)
 large_font = pygame.font.SysFont("Consolas", 32, bold=True)
-bit_font = pygame.font.SysFont("Consolas", 40, bold=True)
+bit_font = pygame.font.SysFont("Consolas", 32, bold=True)
+label_font = pygame.font.SysFont("Consolas", 14, bold=True)
 
 # State Variables
-enable_toggle = 0
-mcu_feedback = "MCU Upload Only Mode - No RX Data expected."
+eco_toggle = 0
+system_mode = 0  # 0: Disabled, 1: Enabled, 2: Recall
+led_toggle = 0
 ser = None
 is_connected = False
-key_states = {'w': 0, 'a': 0, 's': 0, 'd': 0}
+last_rotate_time = 0  # Timestamp for the 10s cooldown
+
+# key_states tracks the live status of bits
+key_states = {'w': 0, 'a': 0, 's': 0, 'd': 0, 'r': 0}
+
+mcu_feedback = "Searching for MCU..."
+last_sent_bits = "00000000" 
+
+# Recall & Recording Logic
+recorded_path = [] 
+is_replaying = False
+is_recording = False 
+
+# Tron Physics Variables
+tron_surf = pygame.Surface((400, 400))
+tron_surf.fill((5, 5, 5))
+car_x, car_y = 200.0, 200.0
+car_angle = -90.0  
+turn_speed = 1.5    
+base_velocity = 0.25 
 
 def get_bit_string():
-    return f"{key_states['w']}{key_states['a']}{key_states['s']}{key_states['d']}{enable_toggle}"
-
-def get_drive_state():
-    """Calculates drive state based on Python-side logic."""
-    if not enable_toggle:
-        return "STOPPED"
+    """Generates the 8-bit ASCII string. Order: W, A, S, D, E, M, R, L"""
+    e_bit = 1 if system_mode > 0 else 0
     
-    if key_states['w'] and not key_states['s']:
-        return "FORWARD"
-    elif key_states['s'] and not key_states['w']:
-        return "REVERSE"
-    elif key_states['a'] or key_states['d']:
-        return "TURNING"
-    else:
-        return "STOPPED"
+    bits = [
+        int(key_states['w']), 
+        int(key_states['a']), 
+        int(key_states['s']), 
+        int(key_states['d']),
+        int(e_bit), 
+        int(eco_toggle), 
+        int(key_states['r']), 
+        int(led_toggle)
+    ]
+    return "".join(str(b) for b in bits)
 
-def send_command():
-    global is_connected
+def send_command(manual_cmd=None):
+    """Sends ASCII string. Updates last_sent_bits for the UI."""
+    global is_connected, last_sent_bits
+    
+    cmd_str = manual_cmd if manual_cmd else get_bit_string()
+    
+    if system_mode == 0 and manual_cmd is None:
+        cmd_str = "00000000"
+
+    last_sent_bits = cmd_str 
+    
     if ser and ser.is_open:
         try:
-            cmd = get_bit_string() + '\n'
-            ser.write(cmd.encode())
+            ser.write((cmd_str + '\n').encode('ascii'))
             is_connected = True
-        except serial.SerialException:
+        except:
             is_connected = False
+
+def run_replay():
+    global is_replaying, is_recording
+    if not recorded_path: return
+    is_recording = False 
+    is_replaying = True
+    for cmd in recorded_path:
+        send_command(manual_cmd=cmd)
+        time.sleep(0.016) 
+    is_replaying = False
+    send_command("00000000")
 
 def serial_monitor():
     global ser, is_connected, mcu_feedback
@@ -64,7 +106,7 @@ def serial_monitor():
                 ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1)
                 is_connected = True
                 mcu_feedback = f"Connected to {SERIAL_PORT}."
-        except Exception:
+        except:
             is_connected = False
             mcu_feedback = f"Searching for {SERIAL_PORT}..."
             ser = None
@@ -78,73 +120,200 @@ def draw_text(text, x, y, color=WHITE, center=False, use_large=False):
     rect = surf.get_rect(center=(x, y)) if center else surf.get_rect(topleft=(x, y))
     screen.blit(surf, rect)
 
-def draw_bit_box(label, bit_val, x, y, size=70):
-    color = GREEN if bit_val == 1 else LIGHT_GRAY
-    rect = (x, y, size, size)
-    pygame.draw.rect(screen, color, rect, 2 if bit_val == 0 else 0, 8)
-    b_txt = bit_font.render(str(bit_val), True, color)
-    screen.blit(b_txt, (x + size//2 - 12, y + size//2 - 20))
-    draw_text(label, x + size//2 - 8, y + size + 10, color)
+def draw_key(label, bit_val, x, y, size=55, custom_color=None):
+    val = int(bit_val)
+    color = custom_color if custom_color else (GREEN if val == 1 else LIGHT_GRAY)
+    pygame.draw.rect(screen, color, (x, y, size, size), 2 if val == 0 else 0, 6)
+    b_txt = bit_font.render(str(val), True, BLACK if val == 1 else color)
+    screen.blit(b_txt, (x + size//2 - 10, y + size//2 - 15))
+    draw_text(label, x + size//2, y + size + 12, color, center=True)
+
+def draw_pot(label, val, x, y, vertical=True):
+    w, h = (20, 150) if vertical else (150, 20)
+    pygame.draw.rect(screen, LIGHT_GRAY, (x, y, w, h), 1)
+    if vertical:
+        pos = y + 75 - (val * 75 // 127)
+        pygame.draw.circle(screen, BLUE, (x + 10, int(pos)), 8)
+    else:
+        pos = x + 75 + (val * 75 // 127)
+        pygame.draw.circle(screen, BLUE, (int(pos), y + 10), 8)
+    draw_text(f"{label}: {val}", x - 20 if vertical else x + 35, y + h + 10, WHITE)
+
+def update_tron_physics():
+    global car_x, car_y, car_angle
+    if system_mode != 2 and not is_replaying: return
+    
+    eco_mod = 0.5 if eco_toggle else 1.0
+    current_turn = turn_speed * eco_mod
+    current_vel = base_velocity * eco_mod
+    old_x, old_y = car_x, car_y
+    
+    if key_states['r']:
+        car_angle += current_turn * 1.5
+    else:
+        if key_states['a']: car_angle -= current_turn
+        if key_states['d']: car_angle += current_turn
+        rad = math.radians(car_angle)
+        if key_states['w']:
+            car_x += math.cos(rad) * current_vel
+            car_y += math.sin(rad) * current_vel
+        if key_states['s']:
+            car_x -= math.cos(rad) * current_vel
+            car_y -= math.sin(rad) * current_vel
+            
+    car_x %= 400
+    car_y %= 400
+    if not key_states['r'] and (key_states['w'] or key_states['s']):
+        if abs(car_x - old_x) < 50 and abs(car_y - old_y) < 50:
+            pygame.draw.line(tron_surf, TRON_CYAN, (old_x, old_y), (car_x, car_y), 2)
 
 running = True
+clock = pygame.time.Clock()
+
 while running:
     screen.fill(BLACK)
+    now = time.time()
+    ui_bits_string = get_bit_string()
+
+    # Calculate remaining cooldown for UI
+    time_since_rotate = now - last_rotate_time
+    rotate_ready = time_since_rotate >= ROTATE_COOLDOWN
+    cooldown_remaining = max(0, int(ROTATE_COOLDOWN - time_since_rotate))
+
+    max_pwr = 64 if eco_toggle else 127
+    v_val = max_pwr if key_states['w'] else -max_pwr if key_states['s'] else 0
+    h_val = -max_pwr if key_states['a'] else max_pwr if key_states['d'] else 0
+
     for event in pygame.event.get():
         if event.type == pygame.QUIT: running = False
+        
         if event.type == pygame.KEYDOWN:
             k = event.unicode.lower()
-            if k in key_states:
-                key_states[k] = 1
+            if k in key_states: 
+                if k == 'r':
+                    if rotate_ready:
+                        # PULSE LOGIC: Set high, send once, then pull low immediately
+                        key_states['r'] = 1
+                        last_rotate_time = now 
+                        if system_mode == 1: 
+                            send_command()
+                        key_states['r'] = 0 
+                    else:
+                        print(f"Rotate on cooldown: {cooldown_remaining}s left")
+                else:
+                    key_states[k] = 1
+                    if system_mode == 1: send_command()
+
+            elif k == 'e': 
+                system_mode = (system_mode + 1) % 3
+                if system_mode != 2: is_recording = False 
                 send_command()
-            elif k == 'e':
-                enable_toggle = 1 if enable_toggle == 0 else 0
-                send_command()
+            elif k == 'm': 
+                eco_toggle = 1 - eco_toggle
+                if system_mode == 1: send_command()
+            elif k == 'l': 
+                led_toggle = 1 - led_toggle
+                if system_mode == 1: send_command()
+            elif k == 'b' and system_mode == 2:
+                is_recording = not is_recording
+            elif k == 'n' and system_mode == 2 and not is_replaying:
+                threading.Thread(target=run_replay, daemon=True).start()
+            elif k == 'q':
+                tron_surf.fill((5, 5, 5))
+                car_x, car_y, car_angle = 200.0, 200.0, -90.0
+                recorded_path = []
+                is_recording = False
+                send_command("00000000")
+
         if event.type == pygame.KEYUP:
             k = event.unicode.lower()
-            if k in key_states:
-                key_states[k] = 0
-                send_command()
+            if k in key_states: 
+                if k != 'r': # 'r' is already managed by the pulse logic
+                    key_states[k] = 0
+                if system_mode == 1: send_command()
 
-    # 1. Header Row (Enable Status & Drive State)
-    # Enable Panel
-    status_color = GREEN if enable_toggle else RED
+    if system_mode == 2 and is_recording and not is_replaying:
+        recorded_path.append(ui_bits_string)
+
+    update_tron_physics()
+
+    # --- UI RENDERING ---
+    mode_names, mode_colors = ["DISABLED", "ENABLED", "RECALL"], [RED, GREEN, YELLOW]
     pygame.draw.rect(screen, DARK_BLUE, (50, 30, 430, 80), 0, 15)
-    pygame.draw.rect(screen, status_color, (50, 30, 430, 80), 3, 15)
-    draw_text("SYSTEM ENABLED" if enable_toggle else "SYSTEM DISABLED", 265, 70, status_color, center=True, use_large=True)
+    pygame.draw.rect(screen, mode_colors[system_mode], (50, 30, 430, 80), 3, 15)
+    draw_text(f"SYSTEM {mode_names[system_mode]}", 265, 70, mode_colors[system_mode], center=True, use_large=True)
 
-    # Drive State Panel (Manual Mode Info)
-    drive_str = get_drive_state()
     pygame.draw.rect(screen, DARK_BLUE, (500, 30, 400, 80), 0, 15)
     pygame.draw.rect(screen, BLUE, (500, 30, 400, 80), 2, 15)
-    draw_text("MANUAL MODE", 700, 50, LIGHT_GRAY, center=True)
-    draw_text(f"DRIVE STATE: {drive_str}", 700, 85, WHITE if drive_str == "STOPPED" else GREEN, center=True)
+    d_state = "REPLAYING" if is_replaying else ("RECORDING" if is_recording else ("ACTIVE" if system_mode == 1 else "STOPPED"))
+    draw_text(f"DRIVE: {d_state}", 700, 70, YELLOW if is_replaying or is_recording else GREEN, center=True, use_large=True)
 
-    # 2. Command Layout
-    draw_text("COMMAND LAYOUT:", 100, 150, LIGHT_GRAY)
-    base_x, base_y = 150, 190
-    draw_bit_box("W", key_states['w'], base_x + 85, base_y)
-    draw_bit_box("A", key_states['a'], base_x, base_y + 85)
-    draw_bit_box("S", key_states['s'], base_x + 85, base_y + 85)
-    draw_bit_box("D", key_states['d'], base_x + 170, base_y + 85)
-    draw_bit_box("ENABLE", enable_toggle, base_x + 350, base_y + 42, size=90)
+    bx, by = 80, 160
+    draw_key("W", key_states['w'], bx + 65, by)
+    draw_key("A", key_states['a'], bx, by + 80)
+    draw_key("S", key_states['s'], bx + 65, by + 80)
+    draw_key("D", key_states['d'], bx + 130, by + 80)
+    
+    draw_key("ECO(M)", eco_toggle, bx + 210, by)
+    en_col = mode_colors[system_mode] if system_mode > 0 else LIGHT_GRAY
+    draw_key("EN(E)", 1 if system_mode > 0 else 0, bx + 210, by + 80, custom_color=en_col)
+    
+    # Cooldown Visuals
+    rot_color = LIGHT_GRAY if rotate_ready else RED
+    draw_key("ROT(R)", key_states['r'], bx + 285, by, custom_color=rot_color)
+    if not rotate_ready:
+        draw_text(f"{cooldown_remaining}s", bx + 312, by + 28, RED, center=True)
 
-    # 3. Connection Heartbeat
-    hb_color = GREEN if is_connected else RED
-    hb_text = "SERIAL ACTIVE" if is_connected else "SERIAL DISCONNECTED"
-    draw_text("CABLE CONNECTION:", 100, 430, LIGHT_GRAY)
-    pygame.draw.circle(screen, hb_color, (300, 440), 8)
-    draw_text(hb_text, 320, 430, hb_color)
+    draw_key("LED(L)", led_toggle, bx + 285, by + 80)
 
-    # 4. Status Log
-    draw_text("STATUS LOG:", 100, 470, LIGHT_GRAY)
-    term_rect = (100, 500, 750, 100) # Widened log box
-    pygame.draw.rect(screen, (10, 10, 10), term_rect, 0, 5)
-    pygame.draw.rect(screen, LIGHT_GRAY, term_rect, 1, 5)
-    draw_text(mcu_feedback, 115, 515, GREEN)
+    draw_text("JOYSTICK POTS:", 480, 140, LIGHT_GRAY)
+    draw_pot("V-POT", v_val, 500, 180, vertical=True)
+    draw_pot("H-POT", h_val, 620, 245, vertical=False)
 
-    # 5. Footer
-    draw_text(f"BITSTREAM: {get_bit_string()}", 475, 650, BLUE, center=True, use_large=True)
-    draw_text("WASD: Momentary | E: Latched Toggle", 475, 690, LIGHT_GRAY, center=True)
+    draw_text("CONNECTION:", 80, 430, LIGHT_GRAY)
+    pygame.draw.circle(screen, GREEN if is_connected else RED, (195, 437), 8)
+    draw_text("ACTIVE" if is_connected else "DISCONNECTED", 210, 430, GREEN if is_connected else RED)
+    
+    draw_text("STATUS LOG:", 80, 470, LIGHT_GRAY)
+    pygame.draw.rect(screen, (10, 10, 10), (80, 500, 750, 60), 0, 5)
+    pygame.draw.rect(screen, LIGHT_GRAY, (80, 500, 750, 60), 1, 5)
+    log_msg = mcu_feedback if not is_replaying else "STREAMING BUFFER TO MCU..."
+    draw_text(log_msg, 100, 518, YELLOW if is_replaying else GREEN)
+
+    tx, ty = 880, 180
+    draw_text("CAR MOVEMENT TRACKER:", tx, 140, LIGHT_GRAY)
+    tracker_border = TRON_CYAN if system_mode == 2 or is_replaying else GRAY
+    pygame.draw.rect(screen, tracker_border, (tx-5, ty-5, 410, 410), 2, 5)
+    
+    if system_mode == 2 or is_replaying:
+        screen.blit(tron_surf, (tx, ty))
+        rad = math.radians(car_angle)
+        car_pts = [(tx + car_x + (math.cos(rad)*12 - math.sin(rad)*7), ty + car_y + (math.sin(rad)*12 + math.cos(rad)*7)),
+                   (tx + car_x + (math.cos(rad)*12 + math.sin(rad)*7), ty + car_y + (math.sin(rad)*12 - math.cos(rad)*7)),
+                   (tx + car_x + (-math.cos(rad)*12 + math.sin(rad)*7), ty + car_y + (-math.sin(rad)*12 - math.cos(rad)*7)),
+                   (tx + car_x + (-math.cos(rad)*12 - math.sin(rad)*7), ty + car_y + (-math.sin(rad)*12 + math.cos(rad)*7))]
+        pygame.draw.polygon(screen, GRAY, car_pts)
+        pygame.draw.polygon(screen, WHITE, car_pts, 1)
+        pygame.draw.line(screen, RED, (tx+car_x, ty+car_y), (tx+car_x - math.cos(rad)*15, ty+car_y - math.sin(rad)*15), 3)
+
+    buffer_color = RED if is_recording else (YELLOW if system_mode == 2 else WHITE)
+    draw_text(f"BUFFER SIZE: {len(recorded_path)} steps", tx, ty + 420, buffer_color)
+    draw_text(f"LIVE HW OUTPUT: {last_sent_bits}", tx, ty + 445, TRON_CYAN)
+    
+    if system_mode == 2:
+        draw_text("[B] TOGGLE RECORD | [N] REPLAY | [Q] RESET", tx, ty + 475, LIGHT_GRAY)
+
+    draw_text("BITSTREAM DECODER (CURRENT STATE):", 80, 580, LIGHT_GRAY)
+    labels = ["W", "A", "S", "D", "E", "M", "R", "L"]
+    for i, label in enumerate(labels):
+        val = int(ui_bits_string[i])
+        x_p, y_p = 100 + (i * 90), 620
+        c = GREEN if val else LIGHT_GRAY
+        pygame.draw.rect(screen, c, (x_p, y_p, 40, 40), 0 if val else 1, 4)
+        screen.blit(bit_font.render(str(val), True, BLACK if val else WHITE), (x_p+10, y_p+2))
+        screen.blit(label_font.render(label, True, c), (x_p+5, y_p+45))
 
     pygame.display.flip()
+    clock.tick(60)
+
 pygame.quit()
